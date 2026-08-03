@@ -1,9 +1,9 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  effect,
   inject,
   input,
-  OnInit,
   signal,
   viewChild,
 } from '@angular/core';
@@ -12,32 +12,59 @@ import { IssuePreviewItemComponent } from '../issue-preview-item/issue-preview-i
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
 import { DropListService } from '../../../core-ui/drop-list/drop-list.service';
 import { IssueService } from '../../issue/issue.service';
-import { IssueProvider, SearchResultItem } from '../../issue/issue.model';
+import {
+  IssueProvider,
+  IssueProviderCalendar,
+  SearchResultItem,
+} from '../../issue/issue.model';
 import { CdkDropList } from '@angular/cdk/drag-drop';
 import { T } from 'src/app/t.const';
 import { ICalIssueReduced } from '../../issue/providers/calendar/calendar.model';
 import { getErrorTxt } from 'src/app/util/get-error-text';
-import { getWorklogStr } from '../../../util/get-work-log-str';
-import { DatePipe } from '@angular/common';
+import { getDbDateStr } from '../../../util/get-db-date-str';
+import { LocaleDatePipe } from 'src/app/ui/pipes/locale-date.pipe';
+import { ShortTimePipe } from '../../../ui/pipes/short-time.pipe';
 import { standardListAnimation } from '../../../ui/animations/standard-list.ani';
+import { Log } from '../../../core/log';
+import { loadFromRealLs, saveToRealLs } from '../../../core/persistence/local-storage';
+import { LS } from '../../../core/persistence/storage-keys.const';
+import { MatIcon } from '@angular/material/icon';
+import { TranslatePipe } from '@ngx-translate/core';
+import { passesCalendarEventRegexFilter } from '../../calendar-integration/calendar-event-regex-filter';
+import { DateTimeFormatService } from '../../../core/date-time-format/date-time-format.service';
 
 @Component({
   selector: 'issue-panel-calendar-agenda',
-  imports: [ErrorCardComponent, IssuePreviewItemComponent, MatProgressSpinner, DatePipe],
+  imports: [
+    ErrorCardComponent,
+    IssuePreviewItemComponent,
+    MatProgressSpinner,
+    LocaleDatePipe,
+    ShortTimePipe,
+    MatIcon,
+    TranslatePipe,
+  ],
   templateUrl: './issue-panel-calendar-agenda.component.html',
   styleUrl: './issue-panel-calendar-agenda.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
   animations: [standardListAnimation],
 })
-export class IssuePanelCalendarAgendaComponent implements OnInit {
+export class IssuePanelCalendarAgendaComponent {
   readonly T: typeof T = T;
 
   dropListService = inject(DropListService);
   private _issueService = inject(IssueService);
+  private _dateTimeFormatService = inject(DateTimeFormatService);
+  private _loadId = 0;
+
+  // Exposed so the template can pass the reactive locale to the now-pure
+  // `localeDate` pipe, preserving re-render on a locale change.
+  readonly locale = this._dateTimeFormatService.currentLocale;
 
   issueProvider = input.required<IssueProvider>();
   error = signal<string | undefined>(undefined);
   isLoading = signal(false);
+  isShowingCachedData = signal(false);
 
   readonly dropList = viewChild(CdkDropList);
 
@@ -48,9 +75,9 @@ export class IssuePanelCalendarAgendaComponent implements OnInit {
     }[]
   >([]);
 
-  ngOnInit(): void {
-    this._loadAgendaItems();
-  }
+  private _loadOnProviderChange = effect(() => {
+    this._loadAgendaItems(this.issueProvider());
+  });
 
   addIssue(item: SearchResultItem): void {
     const ip = this.issueProvider();
@@ -59,7 +86,7 @@ export class IssuePanelCalendarAgendaComponent implements OnInit {
       throw new Error('Issue Provider and Search Result Type dont match');
     }
 
-    console.log('Add issue', item);
+    Log.log('Add issue', item);
 
     this._issueService.addTaskFromIssue({
       issueDataReduced: item.issueData,
@@ -68,7 +95,7 @@ export class IssuePanelCalendarAgendaComponent implements OnInit {
     });
   }
 
-  private _loadAgendaItems(): void {
+  private _loadAgendaItems(provider: IssueProvider): void {
     // this._setAgendaItems([
     //   {
     //     issueType: 'ICAL',
@@ -98,32 +125,61 @@ export class IssuePanelCalendarAgendaComponent implements OnInit {
     //     },
     //   },
     // ]);
+    const loadId = ++this._loadId;
     this.isLoading.set(true);
+    this.error.set(undefined);
     this._issueService
-      .searchIssues$(
-        '',
-        this.issueProvider().id,
-        this.issueProvider().issueProviderKey,
-        true,
-      )
-      .subscribe(
-        (items: SearchResultItem[]) => {
-          this.isLoading.set(false);
-          this._setAgendaItems(items as SearchResultItem<'ICAL'>[]);
-        },
-        (e) => {
-          this.isLoading.set(false);
+      .searchIssues('', provider.id, provider.issueProviderKey, true)
+      .then((items: SearchResultItem[]) => {
+        if (loadId !== this._loadId) {
+          return;
+        }
+        this.isLoading.set(false);
+        this.isShowingCachedData.set(false);
+        const icalItems = items as SearchResultItem<'ICAL'>[];
+        this._setAgendaItems(icalItems);
+        // Cache successful results
+        this._saveToCache(provider.id, icalItems);
+      })
+      .catch((e) => {
+        if (loadId !== this._loadId) {
+          return;
+        }
+        this.isLoading.set(false);
+        Log.err(e);
+        this.error.set(getErrorTxt(e));
+        // Fall back to cached data when fetch fails (offline mode)
+        const cachedItems = this._getFromCache(provider.id);
+        if (cachedItems) {
+          this.isShowingCachedData.set(true);
+          this._setAgendaItems(this._filterCachedItemsForProvider(cachedItems, provider));
+        } else {
           this._setAgendaItems([]);
-          console.error(e);
-          this.error.set(getErrorTxt(e));
-        },
-      );
+        }
+      });
+  }
+
+  private _filterCachedItemsForProvider(
+    items: SearchResultItem<'ICAL'>[],
+    provider: IssueProvider,
+  ): SearchResultItem<'ICAL'>[] {
+    if (provider.issueProviderKey !== 'ICAL') {
+      return items;
+    }
+    const calProvider = provider as IssueProviderCalendar;
+    return items.filter((item) =>
+      passesCalendarEventRegexFilter(
+        item.issueData,
+        calProvider.filterIncludeRegex,
+        calProvider.filterExcludeRegex,
+      ),
+    );
   }
 
   private _setAgendaItems(items: SearchResultItem<'ICAL'>[]): void {
     const agenda = items.reduce(
       (acc, item) => {
-        const date = getWorklogStr((item.issueData as ICalIssueReduced).start);
+        const date = getDbDateStr((item.issueData as ICalIssueReduced).start);
 
         const existingDay = acc.find((day) => day.dayStr === date);
         if (existingDay) {
@@ -145,5 +201,38 @@ export class IssuePanelCalendarAgendaComponent implements OnInit {
     });
 
     this.agendaItems.set(agenda.sort((a, b) => (a.dayStr > b.dayStr ? 1 : -1)));
+  }
+
+  private _getCacheKey(providerId: string): string {
+    return `calendar_agenda:${providerId}`;
+  }
+
+  private _getFromCache(providerId: string): SearchResultItem<'ICAL'>[] | null {
+    try {
+      const cache = loadFromRealLs(LS.ISSUE_SEARCH_CACHE);
+      if (!cache || typeof cache !== 'object') {
+        return null;
+      }
+      const key = this._getCacheKey(providerId);
+      const cachedItems = (cache as { [key: string]: unknown })[key];
+      return Array.isArray(cachedItems)
+        ? (cachedItems as SearchResultItem<'ICAL'>[])
+        : null;
+    } catch (e) {
+      Log.warn('Failed to load calendar agenda cache', e);
+      return null;
+    }
+  }
+
+  private _saveToCache(providerId: string, items: SearchResultItem<'ICAL'>[]): void {
+    try {
+      const cache: { [key: string]: unknown } =
+        (loadFromRealLs(LS.ISSUE_SEARCH_CACHE) as { [key: string]: unknown }) || {};
+      const key = this._getCacheKey(providerId);
+      cache[key] = items;
+      saveToRealLs(LS.ISSUE_SEARCH_CACHE, cache);
+    } catch (e) {
+      Log.warn('Failed to save calendar agenda cache', e);
+    }
   }
 }

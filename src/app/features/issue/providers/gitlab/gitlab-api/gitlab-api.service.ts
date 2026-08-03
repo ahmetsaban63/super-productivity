@@ -7,7 +7,7 @@ import {
   HttpRequest,
 } from '@angular/common/http';
 import { parseUrl, stringifyUrl } from 'query-string';
-import { EMPTY, forkJoin, Observable, of } from 'rxjs';
+import { EMPTY, Observable } from 'rxjs';
 import { SnackService } from 'src/app/core/snack/snack.service';
 
 import { GitlabCfg } from '../gitlab.model';
@@ -24,16 +24,17 @@ import {
   reduce,
   take,
 } from 'rxjs/operators';
-import { GitlabIssue } from '../gitlab-issue/gitlab-issue.model';
+import { GitlabIssue } from '../gitlab-issue.model';
 import {
   getPartsFromGitlabIssueId,
   mapGitlabIssue,
   mapGitlabIssueToSearchResult,
-} from '../gitlab-issue/gitlab-issue-map.util';
+} from '../gitlab-issue-map.util';
 import { SearchResultItem } from '../../../issue.model';
 import { GITLAB_TYPE, ISSUE_PROVIDER_HUMANIZED } from '../../../issue.const';
 import { assertTruthy } from '../../../../../util/assert-truthy';
 import { handleIssueProviderHttpError$ } from '../../../handle-issue-provider-http-error';
+import { IssueLog } from '../../../../../core/log';
 
 @Injectable({
   providedIn: 'root',
@@ -43,7 +44,7 @@ export class GitlabApiService {
   private _http = inject(HttpClient);
 
   getById$(id: string, cfg: GitlabCfg): Observable<GitlabIssue> {
-    console.log(this._issueApiLink(cfg, id));
+    IssueLog.log(this._issueApiLink(cfg, id));
 
     return this._sendIssuePaginatedRequest$(
       {
@@ -117,27 +118,20 @@ export class GitlabApiService {
     if (!this._isValidSettings(cfg)) {
       return EMPTY;
     }
-    return this._sendIssuePaginatedRequest$(
+    // NOTE: only the first page is fetched and issue comments are intentionally NOT
+    // loaded here. The search dropdown only needs id + title (the comment count already
+    // rides along via user_notes_count, and full notes are re-fetched in the detail view
+    // via getById$). A broad or empty search term can match thousands of issues, so
+    // paginating through all of them and then firing a /notes request per issue produced a
+    // burst of thousands of requests that GitLab rate-limited with a 429 — see #9034.
+    return this._sendIssueRequestFirstPage$(
       {
         url: `${this._apiLink(cfg)}/issues?search=${searchText}${this.getScopeParam(
           cfg,
         )}&order_by=updated_at${this.getCustomFilterParam(cfg)}`,
       },
       cfg,
-    ).pipe(
-      mergeMap((issues: GitlabIssue[]) => {
-        if (issues && issues.length) {
-          return forkJoin([
-            ...issues.map((issue) => this.getIssueWithComments$(issue, cfg)),
-          ]);
-        } else {
-          return of([]);
-        }
-      }),
-      map((issues: GitlabIssue[]) => {
-        return issues ? issues.map(mapGitlabIssueToSearchResult) : [];
-      }),
-    );
+    ).pipe(map((issues) => issues.map(mapGitlabIssueToSearchResult)));
   }
 
   getProjectIssues$(cfg: GitlabCfg): Observable<GitlabIssue[]> {
@@ -166,11 +160,9 @@ export class GitlabApiService {
     total_time_spent: null | number;
   }*/
 
-    const { projectIssueId } = getPartsFromGitlabIssueId(issueId);
-
     return this._sendRawRequest$(
       {
-        url: `${this._apiLink(cfg)}/issues/${projectIssueId}/add_spent_time`,
+        url: `${this._issueApiLink(cfg, issueId)}/add_spent_time`,
         method: 'POST',
         data: {
           duration: duration,
@@ -190,10 +182,9 @@ export class GitlabApiService {
     time_estimate: null | number;
     total_time_spent: null | number;
   }> {
-    const { projectIssueId } = getPartsFromGitlabIssueId(issueId);
     return this._sendRawRequest$(
       {
-        url: `${this._apiLink(cfg)}/issues/${projectIssueId}/time_stats`,
+        url: `${this._issueApiLink(cfg, issueId)}/time_stats`,
       },
       cfg,
     ).pipe(map((res) => (res as any).body));
@@ -240,6 +231,21 @@ export class GitlabApiService {
       map((issues: GitlabOriginalIssue[]) =>
         issues ? issues.map((issue) => mapGitlabIssue(issue, cfg)) : [],
       ),
+    );
+  }
+
+  // Fetches only the first page of issues (no x-next-page follow-up) and maps the raw
+  // response body straight to GitlabIssue[]. Used for search, where fetching every page is
+  // both unnecessary and a rate-limit risk on large projects (see searchIssueInProject$).
+  private _sendIssueRequestFirstPage$(
+    params: HttpRequest<string> | any,
+    cfg: GitlabCfg,
+  ): Observable<GitlabIssue[]> {
+    return this._sendPaginatedRequestImpl$(params, cfg, 1).pipe(
+      map((res: any) => {
+        const issues: GitlabOriginalIssue[] = res && res.body ? res.body : [];
+        return issues.map((issue) => mapGitlabIssue(issue, cfg));
+      }),
     );
   }
 
@@ -307,12 +313,13 @@ export class GitlabApiService {
         responseType: params.responseType,
       },
     ];
-    console.log(allArgs);
+    // NOTE: DO NOT LOG allArgs - contains PRIVATE-TOKEN in headers
+    // IssueLog.log(allArgs);
 
     const req = new HttpRequest(p.method, p.url, ...allArgs);
 
     return this._http.request(req).pipe(
-      // TODO remove type: 0 @see https://brianflove.com/2018/09/03/angular-http-client-observe-response/
+      // Filter out HttpEventType.Sent (type: 0) events to only process actual responses
       filter((res) => !(res === Object(res) && res.type === 0)),
       catchError((err) =>
         handleIssueProviderHttpError$<HttpEvent<unknown>>(
@@ -325,12 +332,12 @@ export class GitlabApiService {
   }
 
   private _issueApiLink(cfg: GitlabCfg, issueId: string): string {
-    console.log(issueId);
-    const { projectIssueId } = getPartsFromGitlabIssueId(issueId);
-    return `${this._apiLink(cfg)}/issues/${projectIssueId}`;
+    IssueLog.log(issueId);
+    const { project, projectIssueId } = getPartsFromGitlabIssueId(issueId);
+    return `${this._projectApiLink(cfg, project)}/issues/${projectIssueId}`;
   }
 
-  private _apiLink(cfg: GitlabCfg): string {
+  private _projectApiLink(cfg: GitlabCfg, project: string): string {
     let apiURL: string = '';
 
     if (cfg.gitlabBaseUrl) {
@@ -342,8 +349,12 @@ export class GitlabApiService {
       apiURL = GITLAB_API_BASE_URL + '/';
     }
 
-    const projectURL = assertTruthy(cfg.project).toString().replace(/\//gi, '%2F');
+    const projectURL = assertTruthy(project).toString().replace(/\//gi, '%2F');
     apiURL += 'projects/' + projectURL;
     return apiURL;
+  }
+
+  private _apiLink(cfg: GitlabCfg): string {
+    return this._projectApiLink(cfg, assertTruthy(cfg.project));
   }
 }

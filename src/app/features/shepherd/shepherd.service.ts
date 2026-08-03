@@ -1,14 +1,13 @@
 import { Injectable, inject } from '@angular/core';
+import { firstValueFrom } from 'rxjs';
 import { first } from 'rxjs/operators';
 import { SHEPHERD_STEPS, TourId } from './shepherd-steps.const';
 import { LayoutService } from '../../core-ui/layout/layout.service';
 import { TaskService } from '../tasks/task.service';
-import { Actions } from '@ngrx/effects';
 import { GlobalConfigService } from '../config/global-config.service';
 import { Router } from '@angular/router';
 import { WorkContextService } from '../work-context/work-context.service';
-import Shepherd from 'shepherd.js';
-import Step = Shepherd.Step;
+import { LOCAL_ACTIONS } from '../../util/local-actions.token';
 
 @Injectable({
   providedIn: 'root',
@@ -16,18 +15,25 @@ import Step = Shepherd.Step;
 export class ShepherdService {
   private layoutService = inject(LayoutService);
   private taskService = inject(TaskService);
-  private actions$ = inject(Actions);
+  private actions$ = inject(LOCAL_ACTIONS);
   private globalConfigService = inject(GlobalConfigService);
   private _router = inject(Router);
   private workContextService = inject(WorkContextService);
 
   isActive = false;
-  tour?: Shepherd.Tour;
+  tour?: any; // Will be Shepherd.Tour when loaded
+  private _Shepherd?: typeof import('shepherd.js').default;
+  private _initPromise: Promise<void> | null = null;
 
   async init(): Promise<void> {
+    // Lazy load Shepherd.js only when needed
+    if (!this._Shepherd) {
+      const ShepherdModule = await import('shepherd.js');
+      this._Shepherd = ShepherdModule.default;
+    }
     this._initialize();
 
-    const cfg = await this.globalConfigService.cfg$.pipe(first()).toPromise();
+    const cfg = await firstValueFrom(this.globalConfigService.cfg$.pipe(first()));
     this.addSteps(
       SHEPHERD_STEPS(
         this,
@@ -35,23 +41,19 @@ export class ShepherdService {
         this.actions$,
         this.layoutService,
         this.taskService,
-        this._router,
         this.workContextService,
       ) as any,
     );
-    this.start();
-    // this.show('XXX' as TourId);
-    // this.show(TourId.Projects as TourId);
   }
 
   async show(id: TourId): Promise<void> {
-    if (!this.isActive) {
-      await this.init();
+    if (!this._initPromise) {
+      this._initPromise = this.init();
     }
-    if (id !== TourId.ProductivityHelper && id !== TourId.StartTourAgain) {
-      await this._router.navigateByUrl('/');
-    }
-
+    await this._initPromise;
+    await this._router.navigateByUrl('/');
+    this.isActive = true;
+    this.tour?.start();
     this.tour?.show(id);
   }
 
@@ -84,7 +86,7 @@ export class ShepherdService {
    * Take a set of steps and create a tour object based on the current configuration
    * @param steps An array of steps
    */
-  addSteps(steps: Array<Step.StepOptions>): void {
+  addSteps(steps: Array<any>): void {
     this._initialize();
     const tour = this.tour;
     if (!tour) {
@@ -115,19 +117,26 @@ export class ShepherdService {
   }
 
   private _initialize(): void {
-    const tourObject = new Shepherd.Tour({
+    if (!this._Shepherd) {
+      throw new Error('Shepherd not loaded');
+    }
+    // Prevent multiple initialization of the same tour
+    if (this.tour) {
+      return;
+    }
+    const tourObject = new this._Shepherd.Tour({
       defaultStepOptions: {
         scrollTo: false,
         highlightClass: 'shepherd-highlight',
         arrow: true,
         cancelIcon: {
-          enabled: false,
+          enabled: true,
         },
         buttons: [],
       },
       confirmCancel: false,
       keyboardNavigation: false,
-      tourName: 'Cool tour',
+      tourName: 'Keyboard Navigation',
       useModalOverlay: false,
       exitOnEsc: false,
     });
@@ -158,7 +167,9 @@ export class ShepherdService {
     };
   }
 
-  private _onTourFinish(completeOrCancel: string): void {
+  private _onTourFinish(_completeOrCancel: string): void {
     this.isActive = false;
+    this.tour = undefined;
+    this._initPromise = null;
   }
 }

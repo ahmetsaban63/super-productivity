@@ -2,23 +2,39 @@ import {
   TASK_REPEAT_WEEKDAY_MAP,
   TaskRepeatCfg,
 } from '../../task-repeat-cfg/task-repeat-cfg.model';
-import moment from 'moment';
 import { T } from '../../../t.const';
 import { getDateTimeFromClockString } from '../../../util/get-date-time-from-clock-string';
+import { isValidSplitTime } from '../../../util/is-valid-split-time';
 import { dateStrToUtcDate } from '../../../util/date-str-to-utc-date';
+import { getWeekdaysMin } from '../../../util/get-weekdays-min';
+import { DateTimeFormatService } from '../../../core/date-time-format/date-time-format.service';
+import { getEffectiveRepeatStartDate } from '../../task-repeat-cfg/store/get-effective-repeat-start-date.util';
+import { TranslateService } from '@ngx-translate/core';
+import { hasNthWeekdayAnchor } from '../../task-repeat-cfg/store/get-nth-weekday-of-month.util';
 
 export const getTaskRepeatInfoText = (
   repeatCfg: TaskRepeatCfg,
-  locale: string,
+  locale: string | undefined,
+  dateTimeFormatService: DateTimeFormatService | undefined,
+  translateService: TranslateService,
 ): [string, { [key: string]: string | number }] => {
-  const timeStr = repeatCfg.startTime
-    ? new Date(
-        getDateTimeFromClockString(repeatCfg.startTime, new Date()),
-      ).toLocaleTimeString(locale, {
-        hour: 'numeric',
-        minute: 'numeric',
-      })
-    : '';
+  // Spelled-out weekday names follow the UI language under the ISO 8601 option
+  // (the `sv` sentinel would otherwise leak Swedish, e.g. "mån"); numeric day/
+  // month below stay on `locale` so ISO day-first ordering is kept. #8987 f/u.
+  const weekdayLocale = dateTimeFormatService?.textLocale() ?? locale;
+  const timeStr =
+    repeatCfg.startTime && isValidSplitTime(repeatCfg.startTime)
+      ? dateTimeFormatService
+        ? dateTimeFormatService.formatTime(
+            getDateTimeFromClockString(repeatCfg.startTime, new Date()),
+          )
+        : new Date(
+            getDateTimeFromClockString(repeatCfg.startTime, new Date()),
+          ).toLocaleTimeString(locale, {
+            hour: 'numeric',
+            minute: 'numeric',
+          })
+      : '';
 
   if (repeatCfg.repeatEvery !== 1) {
     switch (repeatCfg.repeatCycle) {
@@ -70,19 +86,17 @@ export const getTaskRepeatInfoText = (
       ];
 
     case 'WEEKLY':
-      const localWeekDays = moment.weekdaysMin();
+      const localWeekDays = getWeekdaysMin(weekdayLocale);
       const enabledDays = TASK_REPEAT_WEEKDAY_MAP.filter((day) => repeatCfg[day]);
 
       if (enabledDays.length === 1) {
         const enabledDayIndex = TASK_REPEAT_WEEKDAY_MAP.findIndex(
           (day) => repeatCfg[day],
         );
-        const weekDayDate = new Date();
-        weekDayDate.setDate(
-          weekDayDate.getDate() + (enabledDayIndex - weekDayDate.getDay()),
-        );
-        const weekdayStr = weekDayDate.toLocaleDateString(locale, {
+        const weekDayDate = new Date(Date.UTC(2026, 0, 4 + enabledDayIndex));
+        const weekdayStr = weekDayDate.toLocaleDateString(weekdayLocale, {
           weekday: 'short',
+          timeZone: 'UTC',
         });
         return [
           timeStr
@@ -122,8 +136,53 @@ export const getTaskRepeatInfoText = (
       ];
 
     case 'MONTHLY':
+      if (hasNthWeekdayAnchor(repeatCfg)) {
+        const weekDayDate = new Date(Date.UTC(2026, 0, 4 + repeatCfg.monthlyWeekday));
+        const weekdayStr = weekDayDate.toLocaleDateString(weekdayLocale, {
+          weekday: 'long',
+          timeZone: 'UTC',
+        });
+
+        let ordinalKey = '';
+        if (repeatCfg.monthlyWeekOfMonth === -1) {
+          ordinalKey = T.F.TASK_REPEAT.F.ORD_LAST_NTH;
+        } else {
+          const ordinalKeys = [
+            T.F.TASK_REPEAT.F.ORD_FIRST_NTH,
+            T.F.TASK_REPEAT.F.ORD_SECOND_NTH,
+            T.F.TASK_REPEAT.F.ORD_THIRD_NTH,
+            T.F.TASK_REPEAT.F.ORD_FOURTH_NTH,
+          ];
+          ordinalKey = ordinalKeys[repeatCfg.monthlyWeekOfMonth - 1] || '';
+        }
+
+        if (ordinalKey) {
+          const ordinalStr = translateService.instant(ordinalKey);
+
+          return [
+            timeStr
+              ? T.F.TASK_REPEAT.ADD_INFO_PANEL.MONTHLY_NTH_WEEKDAY_AND_TIME
+              : T.F.TASK_REPEAT.ADD_INFO_PANEL.MONTHLY_NTH_WEEKDAY,
+            {
+              ordinalStr,
+              weekdayStr,
+              timeStr,
+            },
+          ];
+        }
+      }
+
+      if (repeatCfg.monthlyLastDay) {
+        return [
+          timeStr
+            ? T.F.TASK_REPEAT.ADD_INFO_PANEL.MONTHLY_LAST_DAY_AND_TIME
+            : T.F.TASK_REPEAT.ADD_INFO_PANEL.MONTHLY_LAST_DAY,
+          { timeStr },
+        ];
+      }
+
       const dateDayStr = dateStrToUtcDate(
-        repeatCfg.startDate as string,
+        getEffectiveRepeatStartDate(repeatCfg),
       ).toLocaleDateString(locale, {
         day: 'numeric',
       });
@@ -140,7 +199,7 @@ export const getTaskRepeatInfoText = (
 
     case 'YEARLY':
       const dayAndMonthStr = dateStrToUtcDate(
-        repeatCfg.startDate as string,
+        getEffectiveRepeatStartDate(repeatCfg),
       ).toLocaleDateString(locale, {
         day: 'numeric',
         month: 'numeric',

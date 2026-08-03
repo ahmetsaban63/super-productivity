@@ -4,24 +4,41 @@ import { getDiffInMonth } from '../../../util/get-diff-in-month';
 import { getDiffInYears } from '../../../util/get-diff-in-years';
 import { getDiffInWeeks } from '../../../util/get-diff-in-weeks';
 import { dateStrToUtcDate } from '../../../util/date-str-to-utc-date';
+import { getEffectiveLastTaskCreationDay } from './get-effective-last-task-creation-day.util';
+import { getEffectiveRepeatStartDate } from './get-effective-repeat-start-date.util';
+import {
+  findMonthlyNthWeekdayOccurrence,
+  hasNthWeekdayAnchor,
+} from './get-nth-weekday-of-month.util';
+import { Log } from '../../../core/log';
 
 export const getNewestPossibleDueDate = (
   taskRepeatCfg: TaskRepeatCfg,
   today: Date,
 ): Date | null => {
-  if (!taskRepeatCfg.startDate) {
-    throw new Error('Repeat startDate needs to be defined');
-  }
-  if (+taskRepeatCfg.repeatEvery < 1) {
-    throw new Error('Invalid repeatEvery value given');
+  // FOR DEBUG
+  // return new Date();
+
+  if (!Number.isInteger(taskRepeatCfg.repeatEvery) || taskRepeatCfg.repeatEvery < 1) {
+    Log.warn(
+      `Invalid repeatEvery value "${taskRepeatCfg.repeatEvery}" for TaskRepeatCfg "${taskRepeatCfg.id}"`,
+    );
+    return null;
   }
 
   const checkDate = new Date(today);
-  const startDateDate = dateStrToUtcDate(taskRepeatCfg.startDate);
-  const lastTaskCreation = new Date(taskRepeatCfg.lastTaskCreation);
-  // set to 2 to be safer(?) for summer/winter time affected comparisons
-  checkDate.setHours(2, 0, 0, 0);
-  lastTaskCreation.setHours(2, 0, 0, 0);
+  // Get the effective last task creation day with fallback logic
+  const startDateStr = getEffectiveRepeatStartDate(taskRepeatCfg);
+  const startDateDate = dateStrToUtcDate(startDateStr);
+
+  // Get the effective last task creation day with fallback logic
+  const lastTaskCreationDateStr =
+    getEffectiveLastTaskCreationDay(taskRepeatCfg) || '1970-01-01';
+  const lastTaskCreation = dateStrToUtcDate(lastTaskCreationDateStr);
+  // Use noon (12:00) to avoid DST issues - noon is never affected by DST transitions
+  checkDate.setHours(12, 0, 0, 0);
+  lastTaskCreation.setHours(12, 0, 0, 0);
+  startDateDate.setHours(12, 0, 0, 0);
 
   if (startDateDate > checkDate) {
     return null;
@@ -55,9 +72,15 @@ export const getNewestPossibleDueDate = (
           break;
         }
         const todayDay = checkDate.getDay();
-        const todayDayStr: keyof TaskRepeatCfg = TASK_REPEAT_WEEKDAY_MAP[todayDay];
+        const todayDayStr = TASK_REPEAT_WEEKDAY_MAP[
+          todayDay
+        ] as keyof typeof TASK_REPEAT_WEEKDAY_MAP;
 
-        if (diffInWeeks % taskRepeatCfg.repeatEvery === 0 && taskRepeatCfg[todayDayStr]) {
+        if (
+          diffInWeeks % taskRepeatCfg.repeatEvery === 0 &&
+          todayDayStr &&
+          taskRepeatCfg[todayDayStr as keyof TaskRepeatCfg] === true
+        ) {
           return checkDate;
         }
         checkDate.setDate(checkDate.getDate() - 1);
@@ -67,13 +90,56 @@ export const getNewestPossibleDueDate = (
 
     case 'MONTHLY': {
       const nrOfMonthsToCheck = taskRepeatCfg.repeatEvery;
-      const dayOfMonthRepeat = startDateDate.getDate();
 
-      checkDate.setDate(dayOfMonthRepeat);
+      if (hasNthWeekdayAnchor(taskRepeatCfg)) {
+        return findMonthlyNthWeekdayOccurrence(taskRepeatCfg, checkDate, {
+          direction: -1,
+          maxMonths: nrOfMonthsToCheck + 1,
+          accept: (candidate, cursor) => {
+            const diffInMonth = getDiffInMonth(startDateDate, cursor);
+            return (
+              candidate <= checkDate &&
+              candidate > lastTaskCreation &&
+              diffInMonth >= 0 &&
+              diffInMonth % taskRepeatCfg.repeatEvery === 0
+            );
+          },
+        });
+      }
 
-      if (today.getDate() < dayOfMonthRepeat) {
+      // `monthlyLastDay` anchors to month-end: day 31 makes setDateSafely's
+      // Math.min(31, lastDayOfMonth) clamp to the true last day every month.
+      const dayOfMonthRepeat = taskRepeatCfg.monthlyLastDay
+        ? 31
+        : startDateDate.getDate();
+
+      // Handle month-end dates properly
+      const setDateSafely = (date: Date, day: number): void => {
+        date.setDate(1); // First set to 1st to avoid overflow
+        const lastDayOfMonth = new Date(
+          date.getFullYear(),
+          date.getMonth() + 1,
+          0,
+        ).getDate();
+        date.setDate(Math.min(day, lastDayOfMonth));
+      };
+
+      // Start by checking if the repeat day has passed this month
+      const lastDayOfCurrentMonth = new Date(
+        checkDate.getFullYear(),
+        checkDate.getMonth() + 1,
+        0,
+      ).getDate();
+      const adjustedDayForCurrentMonth = Math.min(
+        dayOfMonthRepeat,
+        lastDayOfCurrentMonth,
+      );
+
+      if (today.getDate() < adjustedDayForCurrentMonth) {
+        // The repeat day hasn't occurred yet this month, so check previous month
         checkDate.setMonth(checkDate.getMonth() - 1);
       }
+      setDateSafely(checkDate, dayOfMonthRepeat);
 
       for (let i = 0; i < nrOfMonthsToCheck; i++) {
         const diffInMonth = getDiffInMonth(startDateDate, checkDate);
@@ -85,6 +151,7 @@ export const getNewestPossibleDueDate = (
           return checkDate;
         }
         checkDate.setMonth(checkDate.getMonth() - 1);
+        setDateSafely(checkDate, dayOfMonthRepeat);
       }
       return null;
     }
@@ -93,8 +160,9 @@ export const getNewestPossibleDueDate = (
       const nrOfYearsToCheck = taskRepeatCfg.repeatEvery;
       const dayOfMonthRepeat = startDateDate.getDate();
       const monthOfMonthRepeat = startDateDate.getMonth();
-      checkDate.setDate(dayOfMonthRepeat);
+      checkDate.setDate(1);
       checkDate.setMonth(monthOfMonthRepeat);
+      checkDate.setDate(dayOfMonthRepeat);
 
       if (today.getMonth() < monthOfMonthRepeat) {
         checkDate.setFullYear(checkDate.getFullYear() - 1);

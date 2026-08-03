@@ -2,29 +2,48 @@ import { Project, ProjectState } from '../project.model';
 import { createFeatureSelector, createSelector } from '@ngrx/store';
 import { exists } from '../../../util/exists';
 import { PROJECT_FEATURE_NAME, projectAdapter } from './project.reducer';
+import { INBOX_PROJECT } from '../project.const';
+import { devError } from '../../../util/dev-error';
+import { Log } from '../../../core/log';
 
 export const selectProjectFeatureState =
   createFeatureSelector<ProjectState>(PROJECT_FEATURE_NAME);
 const { selectAll } = projectAdapter.getSelectors();
 export const selectAllProjects = createSelector(selectProjectFeatureState, selectAll);
+export const selectAllProjectsExceptInbox = createSelector(selectAllProjects, (ps) =>
+  ps.filter((p) => p.id !== INBOX_PROJECT.id),
+);
 export const selectUnarchivedProjects = createSelector(selectAllProjects, (projects) =>
   projects.filter((p) => !p.isArchived),
 );
 export const selectUnarchivedVisibleProjects = createSelector(
   selectAllProjects,
-  (projects) => projects.filter((p) => !p.isArchived && !p.isHiddenFromMenu),
-);
-export const selectUnarchivedHiddenProjectIds = createSelector(
-  selectAllProjects,
   (projects) =>
-    projects.filter((p) => !p.isArchived && p.isHiddenFromMenu).map((p) => p.id),
+    projects.filter(
+      (p) => !p.isArchived && !p.isHiddenFromMenu && p.id !== INBOX_PROJECT.id,
+    ),
 );
 
 export const selectArchivedProjects = createSelector(selectAllProjects, (projects) =>
   projects.filter((p) => p.isArchived),
 );
+// NOTE: completing a project also sets isArchived, so completed projects are a
+// subset of selectArchivedProjects — keep that one as-is, since it drives
+// active-task filtering (selectArchivedProjectIds in task.selectors).
+export const selectArchivedProjectsSortedByTitle = createSelector(
+  selectArchivedProjects,
+  (projects) => [...projects].sort((a, b) => a.title.localeCompare(b.title)),
+);
+export const selectArrayOfArchivedProjectIds = createSelector(
+  selectArchivedProjects,
+  (ps): string[] => ps.map((p) => p.id).sort(),
+);
+export const selectArchivedProjectIds = createSelector(
+  selectArrayOfArchivedProjectIds,
+  (ids): Set<string> => new Set(ids),
+);
 export const selectAllProjectColors = createSelector(selectAllProjects, (projects) =>
-  projects.reduce((prev, cur) => ({ ...prev, [cur.id]: cur.theme.primary }), {}),
+  projects.reduce((prev, cur) => ({ ...prev, [cur.id]: cur.theme?.primary }), {}),
 );
 export const selectAllProjectColorsAndTitles = createSelector(
   selectAllProjects,
@@ -32,7 +51,7 @@ export const selectAllProjectColorsAndTitles = createSelector(
     projects.reduce(
       (prev, cur) => ({
         ...prev,
-        [cur.id]: { color: cur.theme.primary, title: cur.title },
+        [cur.id]: { color: cur.theme?.primary, title: cur.title },
       }),
       {},
     ),
@@ -42,13 +61,19 @@ export const selectAllProjectColorsAndTitles = createSelector(
 // -----------------
 export const selectProjectById = createSelector(
   selectProjectFeatureState,
-  (state: ProjectState, props: { id: string }): Project => {
-    const p = state.entities[props.id];
+  (state: ProjectState, props: { id: string }): Project | undefined => {
     if (!props.id) {
-      throw new Error(`No project id given – ${props.id}`);
+      devError('No project id given');
+      return undefined;
     }
+    const p = state.entities[props.id];
     if (!p) {
-      throw new Error(`Project ${props.id} not found`);
+      // Log only — a project the user is viewing can vanish via sync
+      // (SYNC_IMPORT_REMOTE, remote delete). devError's window.alert would
+      // block the whole browser on a legitimate runtime state. Matches the
+      // pattern in work-context.selectors.ts for the same case.
+      Log.err('Project ' + props.id + ' not found');
+      return undefined;
     }
     return p;
   },
@@ -63,13 +88,4 @@ export const selectUnarchivedProjectsWithoutCurrent = createSelector(
       .map((id) => exists(s.entities[id]) as Project)
       .filter((p) => !p.isArchived && !p.isHiddenFromMenu && p.id);
   },
-);
-
-export const selectProjectBreakTimeForProject = createSelector(
-  selectProjectById,
-  (project) => project.breakTime,
-);
-export const selectProjectBreakNrForProject = createSelector(
-  selectProjectById,
-  (project) => project.breakNr,
 );

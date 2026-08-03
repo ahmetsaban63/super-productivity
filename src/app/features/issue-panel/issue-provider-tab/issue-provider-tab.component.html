@@ -19,13 +19,20 @@
 
 @if (ip.isEnabled) {
   <!---->
-  @if (ip.issueProviderKey === 'JIRA') {
+  @if (
+    ip.issueProviderKey === 'JIRA' &&
+    IS_WEB_EXTENSION_REQUIRED_FOR_JIRA &&
+    !isJiraDirectFetchEnabled()
+  ) {
+    <div [ngClass]="HelperClasses.isHideForAdvancedFeatures">
+      <p [innerHTML]="T.F.ISSUE.CROSS_ORIGIN_BROWSER_WARNING | translate"></p>
+    </div>
     <div [ngClass]="HelperClasses.isHideForAdvancedFeatures">
       <p [innerHTML]="T.G.EXTENSION_INFO | translate"></p>
     </div>
   }
   <!---->
-  @if (ip.issueProviderKey === 'ICAL') {
+  @if (useAgendaView()) {
     <issue-panel-calendar-agenda [issueProvider]="ip"></issue-panel-calendar-agenda>
   } @else {
     <form
@@ -58,22 +65,22 @@
           <mat-icon
             class="keep-ico"
             matSuffix
-            svgIcon="keep_filled"
             style="cursor: pointer"
             (click)="unPinSearch()"
             [matTooltip]="'Clear pinned search query'"
-          ></mat-icon>
+            >bookmark</mat-icon
+          >
         } @else if (
           ip?.pinnedSearch?.length || searchText()?.length >= SEARCH_MIN_LENGTH
         ) {
           <mat-icon
             class="keep-ico"
             matSuffix
-            svgIcon="keep"
             style="cursor: pointer"
             (click)="pinSearch()"
             [matTooltip]="'Remember search query'"
-          ></mat-icon>
+            >bookmark_add</mat-icon
+          >
         }
         <!-- -->
         @if (searchText().length === 0 && issueProviderHelpLink()) {
@@ -81,7 +88,10 @@
             ><a
               [href]="issueProviderHelpLink()"
               target="_blank"
-              >{{ ISSUE_PROVIDER_HUMANIZED[ip.issueProviderKey] }} search syntax</a
+              >{{
+                ISSUE_PROVIDER_HUMANIZED[ip.issueProviderKey] || ip.issueProviderKey
+              }}
+              search syntax</a
             ></mat-hint
           >
         }

@@ -7,7 +7,7 @@ import {
   MatDialogActions,
 } from '@angular/material/dialog';
 import { IssueLocalState, IssueProviderJira } from '../../../../issue.model';
-import { JiraIssueReduced } from '../../jira-issue/jira-issue.model';
+import { JiraIssueReduced } from '../../jira-issue.model';
 import { Observable, of } from 'rxjs';
 import { JiraApiService } from '../../jira-api.service';
 import { JiraOriginalTransition } from '../../jira-api-responses';
@@ -31,7 +31,6 @@ import { TranslatePipe } from '@ngx-translate/core';
 @Component({
   selector: 'dialog-jira-transition',
   templateUrl: './dialog-jira-transition.component.html',
-  styleUrls: ['./dialog-jira-transition.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     MatDialogTitle,

@@ -1,3 +1,6 @@
+import { Log } from '../../core/log';
+import { isChecklistItemLine } from './checklist-operations';
+
 /*
 we want to match:
 - [x] task
@@ -12,6 +15,9 @@ and not:
 Some text yeah
  */
 
+export const isMarkdownChecklistLine = (line: string): boolean =>
+  isChecklistItemLine(line);
+
 export const isMarkdownChecklist = (text: string): boolean => {
   try {
     const lines = text.split('\n').filter((it) => it.trim() !== '');
@@ -20,13 +26,11 @@ export const isMarkdownChecklist = (text: string): boolean => {
       return false;
     }
 
-    const items = lines.filter(
-      (it) => it.trim().startsWith('- [x] ') || it.trim().startsWith('- [ ] '),
-    );
-    return items.length === lines.length || items.length >= 3;
+    const items = lines.filter(isMarkdownChecklistLine);
+    return items.length === lines.length || items.length >= 2;
   } catch (e) {
-    console.error('Checklist parsing failed');
-    console.error(e);
+    Log.err('Checklist parsing failed');
+    Log.err(e);
     return false;
   }
 };

@@ -1,138 +1,208 @@
-import { Injectable, inject } from '@angular/core';
-import { Actions, createEffect, ofType } from '@ngrx/effects';
-import {
-  addTimeSpent,
-  setCurrentTask,
-  unsetCurrentTask,
-  updateTask,
-} from '../../tasks/store/task.actions';
-import { select, Store } from '@ngrx/store';
-import {
-  distinctUntilChanged,
-  filter,
-  map,
-  skip,
-  tap,
-  withLatestFrom,
-} from 'rxjs/operators';
-import { selectCurrentTask } from '../../tasks/store/task.selectors';
-import { GlobalConfigService } from '../../config/global-config.service';
-import { androidInterface } from '../android-interface';
-import { SyncProviderService } from '../../../imex/sync/sync-provider.service';
-import { TranslateService } from '@ngx-translate/core';
+import { inject, Injectable } from '@angular/core';
+import { createEffect } from '@ngrx/effects';
+import { tap } from 'rxjs/operators';
+import { SnackService } from '../../../core/snack/snack.service';
+import { IS_ANDROID_WEB_VIEW } from '../../../util/is-android-web-view';
+import { DroidLog } from '../../../core/log';
+import { androidInterface, AndroidShareData } from '../android-interface';
+import { TaskService } from '../../tasks/task.service';
+import { TaskAttachmentService } from '../../tasks/task-attachment/task-attachment.service';
 import { T } from '../../../t.const';
-import { msToClockString } from '../../../ui/duration/ms-to-clock-string.pipe';
-import { TaskCopy } from '../../tasks/task.model';
-import { showAddTaskBar } from '../../../core-ui/layout/store/layout.actions';
+import { readableUrl } from '../../../util/readable-url';
 
 // TODO send message to electron when current task changes here
 
 @Injectable()
 export class AndroidEffects {
-  private _actions$ = inject(Actions);
-  private _store$ = inject<Store<any>>(Store);
-  private _globalConfigService = inject(GlobalConfigService);
-  private _syncProviderService = inject(SyncProviderService);
-  private _translateService = inject(TranslateService);
+  private _snackService = inject(SnackService);
+  private _taskService = inject(TaskService);
+  private _taskAttachmentService = inject(TaskAttachmentService);
 
-  taskChangeNotification$: any = createEffect(
-    () =>
-      this._actions$.pipe(
-        ofType(setCurrentTask, unsetCurrentTask, addTimeSpent),
-        withLatestFrom(
-          this._store$.pipe(select(selectCurrentTask)),
-          this._globalConfigService.cfg$,
-          this._syncProviderService.isSyncing$,
+  handleShare$ =
+    IS_ANDROID_WEB_VIEW &&
+    createEffect(
+      () =>
+        androidInterface.onShareWithAttachment$.pipe(
+          tap((shareData) => {
+            // Guard against empty payloads (e.g. stale share data persisted by an
+            // older app version) so we never create a blank, attachment-less task.
+            if (!shareData?.path?.trim()) {
+              DroidLog.warn('Ignoring share intent with empty content');
+              return;
+            }
+            const taskTitle = buildTaskTitle(shareData);
+            const taskId = this._taskService.add(taskTitle);
+            const icon = shareData.type === 'LINK' ? 'link' : 'file_present';
+            this._taskAttachmentService.addAttachment(taskId, {
+              title:
+                shareData.subject?.trim() || shareData.title?.trim() || shareData.path,
+              type: shareData.type,
+              path: shareData.path,
+              icon,
+              id: null,
+            });
+            this._snackService.open({
+              type: 'SUCCESS',
+              msg: 'Task created from share',
+            });
+          }),
         ),
-        tap(([action, current, cfg, isSyncing]) => {
-          if (isSyncing) {
-            return;
-          }
-
-          const isPomodoro = cfg.pomodoro.isEnabled;
-          if (current) {
-            const progress: number =
-              Math.round(
-                current &&
-                  current.timeEstimate &&
-                  (current.timeSpent / current.timeEstimate) * 100,
-              ) || 333;
-            androidInterface.updatePermanentNotification?.(
-              current.title,
-              msToClockString(current.timeSpent, true),
-              isPomodoro ? -1 : progress,
-            );
-          } else {
-            this._setDefaultNotification();
-          }
-        }),
-      ),
-    { dispatch: false },
-  );
-
-  syncNotification$ = createEffect(
-    () =>
-      this._syncProviderService.isSyncing$.pipe(
-        // skip first to avoid default message
-        skip(1),
-        distinctUntilChanged(),
-        tap((isSync) =>
-          isSync
-            ? androidInterface.updatePermanentNotification?.(
-                this._translateService.instant(
-                  T.ANDROID.PERMANENT_NOTIFICATION_MSGS.SYNCING,
-                ),
-                '',
-                999,
-              )
-            : this._setDefaultNotification(),
-        ),
-      ),
-    { dispatch: false },
-  );
-
-  markTaskAsDone$ = createEffect(() =>
-    androidInterface.onMarkCurrentTaskAsDone$.pipe(
-      withLatestFrom(this._store$.select(selectCurrentTask)),
-      filter(([, currentTask]) => !!currentTask),
-      map(([, currentTask]) =>
-        updateTask({
-          task: { id: (currentTask as TaskCopy).id, changes: { isDone: true } },
-        }),
-      ),
-    ),
-  );
-
-  pauseTracking$ = createEffect(() =>
-    androidInterface.onPauseCurrentTask$.pipe(
-      withLatestFrom(this._store$.select(selectCurrentTask)),
-      filter(([, currentTask]) => !!currentTask),
-      map(([, currentTask]) => setCurrentTask({ id: null })),
-    ),
-  );
-
-  showAddTaskBar$ = createEffect(() =>
-    androidInterface.onAddNewTask$.pipe(map(() => showAddTaskBar())),
-  );
-
-  constructor() {
-    // wait for initial translation
-    setTimeout(() => {
-      androidInterface.updatePermanentNotification?.(
-        '',
-        this._translateService.instant(T.ANDROID.PERMANENT_NOTIFICATION_MSGS.INITIAL),
-        -1,
-      );
-    }, 4000);
-  }
-
-  private _setDefaultNotification(): void {
-    androidInterface.updatePermanentNotification?.(
-      '',
-      this._translateService.instant(
-        T.ANDROID.PERMANENT_NOTIFICATION_MSGS.NO_ACTIVE_TASKS,
-      ),
-      -1,
+      { dispatch: false },
     );
-  }
+
+  showForegroundServiceFailure$ =
+    IS_ANDROID_WEB_VIEW &&
+    createEffect(
+      () =>
+        androidInterface.onForegroundServiceStartFailed$.pipe(
+          tap((failure) => {
+            DroidLog.warn('Foreground service notification failed', failure);
+            this._snackService.open({
+              type: 'WARNING',
+              msg:
+                failure.service === 'focusMode'
+                  ? T.F.ANDROID.FOREGROUND_SERVICE_START_FAILED_FOCUS
+                  : T.F.ANDROID.FOREGROUND_SERVICE_START_FAILED_TRACKING,
+              actionStr: T.F.ANDROID.OPEN_NOTIFICATION_SETTINGS,
+              actionFn: () => androidInterface.openAppNotificationSettings?.(),
+              config: { duration: 10000 },
+            });
+          }),
+        ),
+      { dispatch: false },
+    );
+
+  // Process tasks queued from the home screen widget
+  processWidgetTasks$ =
+    IS_ANDROID_WEB_VIEW &&
+    createEffect(
+      () =>
+        androidInterface.onResume$.pipe(
+          tap(() => {
+            const queueJson = androidInterface.getWidgetTaskQueue?.();
+            if (!queueJson) {
+              return;
+            }
+
+            try {
+              const queue = JSON.parse(queueJson);
+              const tasks = queue.tasks || [];
+
+              for (const widgetTask of tasks) {
+                this._taskService.add(widgetTask.title);
+              }
+
+              if (tasks.length > 0) {
+                this._snackService.open({
+                  type: 'SUCCESS',
+                  msg:
+                    tasks.length === 1
+                      ? 'Task added from widget'
+                      : `${tasks.length} tasks added from widget`,
+                });
+              }
+            } catch (e) {
+              DroidLog.err('Failed to process widget tasks', e);
+            }
+          }),
+        ),
+      { dispatch: false },
+    );
+
+  // Drain reminder done/snooze/tap queues on resume (warm start)
+  checkReminderQueuesOnResume$ =
+    IS_ANDROID_WEB_VIEW &&
+    createEffect(
+      () =>
+        androidInterface.onResume$.pipe(
+          tap(() => {
+            try {
+              const doneQueue = androidInterface.getReminderDoneQueue?.();
+              if (doneQueue) {
+                const taskIds: string[] = JSON.parse(doneQueue);
+                DroidLog.log('Resume: found reminder done queue', taskIds);
+                for (const id of taskIds) {
+                  androidInterface.onReminderDone$.next(id);
+                }
+              }
+            } catch (e) {
+              DroidLog.err('Failed to process reminder done queue on resume', e);
+            }
+
+            try {
+              const snoozeQueue = androidInterface.getReminderSnoozeQueue?.();
+              if (snoozeQueue) {
+                const events: { taskId: string; newRemindAt: number }[] =
+                  JSON.parse(snoozeQueue);
+                DroidLog.log('Resume: found reminder snooze queue', events);
+                for (const event of events) {
+                  androidInterface.onReminderSnooze$.next(event);
+                }
+              }
+            } catch (e) {
+              DroidLog.err('Failed to process reminder snooze queue on resume', e);
+            }
+
+            try {
+              const tapTaskId = androidInterface.getReminderTapQueue?.();
+              if (tapTaskId) {
+                DroidLog.log('Resume: found reminder tap queue', tapTaskId);
+                androidInterface.onReminderTap$.next(tapTaskId);
+              }
+            } catch (e) {
+              DroidLog.err('Failed to process reminder tap queue on resume', e);
+            }
+          }),
+        ),
+      { dispatch: false },
+    );
+
+  // Check for pending share data on resume (catches app killed after receiving share)
+  checkPendingShareOnResume$ =
+    IS_ANDROID_WEB_VIEW &&
+    createEffect(
+      () =>
+        androidInterface.onResume$.pipe(
+          tap(() => {
+            try {
+              const pendingShare = androidInterface.getPendingShareData?.();
+              if (pendingShare) {
+                const parsed = JSON.parse(pendingShare);
+                DroidLog.log('Resume: found pending share data');
+                androidInterface.onShareWithAttachment$.next(parsed);
+              }
+            } catch (e) {
+              DroidLog.err('Failed to process pending share on resume', e);
+            }
+          }),
+        ),
+      { dispatch: false },
+    );
 }
+
+/**
+ * Build a meaningful task title from Android share intent data.
+ * Prefers the page subject (EXTRA_SUBJECT, sent by browsers), then an explicit
+ * title (EXTRA_TITLE), then a type-specific fallback derived from the shared
+ * content itself. Never returns the unhelpful literal "Shared Content".
+ */
+export const buildTaskTitle = (shareData: Partial<AndroidShareData>): string => {
+  const subject = shareData.subject?.trim() || '';
+  const title = shareData.title?.trim() || '';
+  const path = shareData.path?.trim() || '';
+
+  let taskTitle: string;
+
+  if (subject) {
+    taskTitle = subject;
+  } else if (title) {
+    taskTitle = title;
+  } else if (shareData.type === 'LINK') {
+    taskTitle = readableUrl(path);
+  } else {
+    const firstLine = path.split('\n')[0].trim();
+    taskTitle = firstLine || 'Shared note';
+  }
+
+  return taskTitle.length > 150 ? taskTitle.substring(0, 147) + '...' : taskTitle;
+};

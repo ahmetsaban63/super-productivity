@@ -1,5 +1,6 @@
 import { TaskCopy } from '../tasks/task.model';
 import { TaskRepeatCfg } from '../task-repeat-cfg/task-repeat-cfg.model';
+import { ScheduleFromCalendarEvent } from '../schedule/schedule.model';
 
 export enum ScheduleItemType {
   Task = 'Task',
@@ -14,8 +15,12 @@ export interface PlannerDay {
   timeLimit: number;
   itemsTotal: number;
   tasks: TaskCopy[];
+  deadlineTasks: TaskCopy[];
   noStartTimeRepeatProjections: NoStartTimeRepeatProjection[];
+  allDayEvents: ScheduleFromCalendarEvent[];
   scheduledIItems: ScheduleItem[];
+  availableHours?: number;
+  progressPercentage?: number;
 }
 
 export interface PlannerDayMap {
@@ -62,3 +67,4 @@ export interface ScheduleItemCalendarEventData {
 }
 
 export const ADD_TASK_PANEL_ID = 'ADD_TASK_PANEL' as const;
+export const OVERDUE_LIST_ID = 'OVERDUE_LIST' as const;

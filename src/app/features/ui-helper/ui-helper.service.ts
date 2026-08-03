@@ -7,6 +7,7 @@ import { UI_LOCAL_HELPER_DEFAULT } from './ui-helper.const';
 import { IS_ELECTRON } from '../../app.constants';
 import { fromEvent } from 'rxjs';
 import { throttleTime } from 'rxjs/operators';
+import { Log } from '../../core/log';
 
 @Injectable({ providedIn: 'root' })
 export class UiHelperService {
@@ -18,7 +19,7 @@ export class UiHelperService {
 
   zoomTo(zoomFactor: number): void {
     if (Number.isNaN(zoomFactor)) {
-      console.error('Invalid zoom factor', zoomFactor);
+      Log.err('Invalid zoom factor', zoomFactor);
       return;
     }
 
@@ -28,11 +29,11 @@ export class UiHelperService {
 
   zoomBy(zoomBy: number): void {
     if (Number.isNaN(zoomBy)) {
-      console.error('Invalid zoom factor', zoomBy);
+      Log.err('Invalid zoom factor', zoomBy);
       return;
     }
     const currentZoom = window.ea.getZoomFactor();
-    console.log({ currentZoom });
+    Log.log({ currentZoom });
 
     const zoomFactor = currentZoom + zoomBy;
 
@@ -49,8 +50,38 @@ export class UiHelperService {
 
       window.ea.showOrFocus();
     } else {
-      console.error('Cannot execute focus app window in browser');
+      Log.err('Cannot execute focus app window in browser');
     }
+  }
+
+  /**
+   * Focus app after a delay to prevent accidental input.
+   * Used for "surprise" focus scenarios (tracking reminder, idle, take-a-break)
+   * where user might still be typing in another app.
+   *
+   * The 1500ms delay gives users time to finish typing after notification appears.
+   * Based on user feedback in issue #5762 where immediate focus caused unintended input.
+   */
+  focusAppAfterNotification(): void {
+    if (!IS_ELECTRON) {
+      return;
+    }
+
+    // Delay focus to prevent accidental input if user is typing in another app.
+    // 1500ms gives users time to finish typing after notification appears.
+    const FOCUS_DELAY_MS = 1500;
+    // Small delay after focus to let window activation complete before blurring
+    const BLUR_DELAY_MS = 100;
+
+    setTimeout(() => {
+      window.ea.showOrFocus();
+      // Blur after focus to prevent any task input from receiving keystrokes
+      setTimeout(() => {
+        if (document.activeElement && document.activeElement !== document.body) {
+          (document.activeElement as HTMLElement).blur();
+        }
+      }, BLUR_DELAY_MS);
+    }, FOCUS_DELAY_MS);
   }
 
   private _zoomFactorMinMax(zoomFactor: number): number {

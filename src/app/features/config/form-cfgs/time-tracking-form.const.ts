@@ -1,4 +1,3 @@
-/* eslint-disable max-len */
 import { ConfigFormSection, TimeTrackingConfig } from '../global-config.model';
 import { T } from '../../../t.const';
 
@@ -55,6 +54,22 @@ export const TIME_TRACKING_FORM_CFG: ConfigFormSection<TimeTrackingConfig> = {
       },
     },
     {
+      key: 'isTrackingReminderNotify',
+      type: 'checkbox',
+      hideExpression: (model) => !model.isTrackingReminderEnabled,
+      templateOptions: {
+        label: T.GCF.TIME_TRACKING.L_IS_TRACKING_REMINDER_NOTIFY,
+      },
+    },
+    {
+      key: 'isTrackingReminderFocusWindow',
+      type: 'checkbox',
+      hideExpression: (model) => !model.isTrackingReminderEnabled,
+      templateOptions: {
+        label: T.GCF.TIME_TRACKING.L_IS_TRACKING_REMINDER_FOCUS_WINDOW,
+      },
+    },
+    {
       key: 'trackingReminderMinTime',
       type: 'duration',
       hideExpression: (model) => !model.isTrackingReminderEnabled,
@@ -62,18 +77,6 @@ export const TIME_TRACKING_FORM_CFG: ConfigFormSection<TimeTrackingConfig> = {
         label: T.GCF.TIME_TRACKING.L_TRACKING_REMINDER_MIN_TIME,
         required: true,
         description: T.G.DURATION_DESCRIPTION,
-      },
-    },
-    {
-      key: 'trackingInterval',
-      type: 'input',
-      defaultValue: 0,
-      templateOptions: {
-        label: T.GCF.TIME_TRACKING.L_TRACKING_INTERVAL,
-        description: T.G.TRACKING_INTERVAL_DESCRIPTION,
-        type: 'number',
-        min: 1000,
-        max: 100_000,
       },
     },
   ],

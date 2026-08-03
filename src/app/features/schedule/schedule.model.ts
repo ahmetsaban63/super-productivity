@@ -1,7 +1,8 @@
 import { SVEType } from './schedule.const';
-import { TaskCopy, TaskPlanned } from '../tasks/task.model';
+import { TaskCopy, TaskWithDueTime } from '../tasks/task.model';
 import { TaskRepeatCfg } from '../task-repeat-cfg/task-repeat-cfg.model';
 import { CalendarIntegrationEvent } from '../calendar-integration/calendar-integration.model';
+import { oneDayInMilliseconds } from '../../util/month-time-conversion';
 
 export interface ScheduleEvent {
   id: string;
@@ -9,10 +10,12 @@ export interface ScheduleEvent {
   style: string;
   startHours: number;
   timeLeftInHours: number;
-  isCloseToOthersFirst: boolean;
-  isCloseToOthers: boolean;
   dayOfMonth?: number;
+  plannedForDay?: string;
+  sourceOccurrenceDate?: string;
   data?: SVE['data'];
+  overlap?: { count: number; offset: number };
+  isBeyondBudget?: boolean;
 }
 
 export interface ScheduleDay {
@@ -28,6 +31,8 @@ interface SVEBase {
   start: number;
   duration: number;
   plannedForDay?: string;
+  sourceOccurrenceDate?: string;
+  isBeyondBudget?: boolean;
 }
 
 export interface SVETask extends SVEBase {
@@ -77,14 +82,9 @@ export interface ScheduleFromCalendarEvent extends CalendarIntegrationEvent {
   icon?: string;
 }
 
-export interface ScheduleCustomEvent
-  extends Omit<ScheduleFromCalendarEvent, 'calProviderId'> {
-  icon: string;
-}
-
 interface SVECalendarEvent extends SVEBase {
   type: SVEType.CalendarEvent;
-  data: ScheduleCustomEvent;
+  data: ScheduleFromCalendarEvent;
 }
 
 export interface ScheduleWorkStartEndCfg {
@@ -134,6 +134,25 @@ export interface ScheduleCalendarMapEntry {
   items: ScheduleFromCalendarEvent[];
 }
 
+export const isScheduleCalendarEvent = (
+  event: ScheduleEvent | null,
+): event is ScheduleEvent & {
+  type: SVEType.CalendarEvent;
+  data: ScheduleFromCalendarEvent;
+} =>
+  event?.type === SVEType.CalendarEvent &&
+  !!event.data &&
+  typeof (event.data as { issueProviderKey?: unknown }).issueProviderKey === 'string';
+
+/**
+ * Whether a calendar event should be treated as all-day. Some providers expose
+ * all-day events as 24h timed events, so a >= one-day duration counts too.
+ * Shared by the planner and the work-view "Later Today" section so they classify
+ * events identically.
+ */
+export const isAllDayCalendarEvent = (calEv: ScheduleFromCalendarEvent): boolean =>
+  calEv.isAllDay === true || calEv.duration >= oneDayInMilliseconds;
+
 // -----------------
 // BlockedBlocks
 export enum BlockedBlockType {
@@ -150,7 +169,7 @@ export interface BlockedBlockEntryScheduledTask {
   start: number;
   end: number;
   type: BlockedBlockType.ScheduledTask | BlockedBlockType.ScheduledTaskSplit;
-  data: TaskPlanned;
+  data: TaskWithDueTime;
 }
 
 export interface BlockedBlockEntryScheduledRepeatProjection {
@@ -160,6 +179,7 @@ export interface BlockedBlockEntryScheduledRepeatProjection {
     | BlockedBlockType.ScheduledRepeatProjection
     | BlockedBlockType.ScheduledRepeatProjectionSplit;
   data: TaskRepeatCfg;
+  sourceOccurrenceDate?: string;
 }
 
 export interface BlockedBlockEntryCalendarEvent {

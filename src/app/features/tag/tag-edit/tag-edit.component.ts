@@ -2,10 +2,12 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  DestroyRef,
   ElementRef,
   inject,
   input,
   output,
+  signal,
   viewChild,
 } from '@angular/core';
 import {
@@ -27,10 +29,11 @@ import { COMMA, ENTER } from '@angular/cdk/keycodes';
 import { T } from '../../../t.const';
 import { TagService } from '../tag.service';
 import { TaskService } from '../../tasks/task.service';
-import { toSignal } from '@angular/core/rxjs-interop';
 import { TaskCopy } from '../../tasks/task.model';
 import { TagComponent } from '../tag/tag.component';
 import { TranslatePipe } from '@ngx-translate/core';
+import { TODAY_TAG } from '../tag.const';
+import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 
 interface Suggestion {
   id: string;
@@ -66,9 +69,13 @@ export class TagEditComponent {
 
   private _tagService = inject(TagService);
   private _taskService = inject(TaskService);
+  private readonly _destroyRef = inject(DestroyRef);
 
-  task = input.required<TaskCopy>();
+  task = input<TaskCopy>();
+  isShowMyDayTag = input<boolean>(false);
   tagIds = input.required<string[]>();
+  excludedTagIds = input<string[]>();
+  tagUpdate = output<string[]>();
 
   escapePress = output<void>();
 
@@ -78,19 +85,41 @@ export class TagEditComponent {
   readonly inputEl = viewChild<ElementRef<HTMLInputElement>>('inputElRef');
   readonly matAutocomplete = viewChild<MatAutocomplete>('autoElRef');
 
-  inputVal = toSignal<string>(this.inputCtrl.valueChanges);
-  tagSuggestions = toSignal(this._tagService.tagsNoMyDayAndNoList$, { initialValue: [] });
+  inputVal = signal<string>('');
+  tagSuggestions = computed(() =>
+    this.isShowMyDayTag()
+      ? this._tagService.tagsInTreeOrder()
+      : this._tagService.tagsNoMyDayAndNoListInTreeOrder(),
+  );
 
+  constructor() {
+    this.inputCtrl.valueChanges
+      .pipe(takeUntilDestroyed(this._destroyRef))
+      .subscribe((value: string | null) => {
+        this.inputVal.set(value ?? '');
+      });
+  }
+
+  allExcludedTagIds = computed<string[]>(() => [
+    ...this.tagIds(),
+    ...(this.excludedTagIds() || []),
+    TODAY_TAG.id,
+  ]);
   filteredSuggestions = computed(() => {
     const val = this.inputVal();
+    const allExcludedTagIds = this.allExcludedTagIds();
+
     if (!val) {
-      return this.tagSuggestions();
+      return this.tagSuggestions().filter(
+        (suggestion) => !allExcludedTagIds.includes(suggestion.id),
+      );
     }
     const filterValue = val.toLowerCase();
+
     return this.tagSuggestions().filter(
       (suggestion) =>
         suggestion.title.toLowerCase().indexOf(filterValue) === 0 &&
-        !this.tagIds().includes(suggestion.id),
+        !allExcludedTagIds.includes(suggestion.id),
     );
   });
 
@@ -151,7 +180,11 @@ export class TagEditComponent {
   }
 
   private _updateModel(v: string[]): void {
-    this._taskService.updateTags(this.task(), v);
+    this.tagUpdate.emit(v);
+    const task = this.task();
+    if (task) {
+      this._taskService.updateTags(task, v);
+    }
   }
 
   private _getExistingSuggestionByTitle(v: string): Suggestion | undefined {
@@ -168,7 +201,9 @@ export class TagEditComponent {
   private _addByTitle(v: string): void {
     const existing = this._getExistingSuggestionByTitle(v);
     if (existing) {
-      this._add(existing.id);
+      if (!this.allExcludedTagIds().includes(existing.id)) {
+        this._add(existing.id);
+      }
     } else {
       this._createNewTag(v);
     }

@@ -1,4 +1,10 @@
-import { ChangeDetectionStrategy, Component, ElementRef, viewChild } from '@angular/core';
+import {
+  ChangeDetectionStrategy,
+  Component,
+  ElementRef,
+  OnDestroy,
+  viewChild,
+} from '@angular/core';
 import { FieldType } from '@ngx-formly/material';
 import { FormlyFieldConfig, FormlyModule } from '@ngx-formly/core';
 import { stringToMs } from '../string-to-ms.pipe';
@@ -9,7 +15,6 @@ import { FormsModule, ReactiveFormsModule } from '@angular/forms';
 @Component({
   selector: 'input-duration-formly',
   templateUrl: './input-duration-formly.component.html',
-  styleUrls: ['./input-duration-formly.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     InputDurationDirective,
@@ -19,32 +24,31 @@ import { FormsModule, ReactiveFormsModule } from '@angular/forms';
     ReactiveFormsModule,
   ],
 })
-export class InputDurationFormlyComponent extends FieldType<FormlyFieldConfig> {
+export class InputDurationFormlyComponent
+  extends FieldType<FormlyFieldConfig>
+  implements OnDestroy
+{
+  private _timeout?: number;
+
   readonly input = viewChild.required('inputEl', { read: ElementRef });
 
   // @ViewChild(MatInput, {static: true}) formFieldControl?: MatInput;
   onInputValueChange(ev: Event): void {
     const val = (ev.target as HTMLInputElement).value;
-    console.log('onInputValueChange', val);
+    // Log.log('formly onInputValueChange', val);
     // this.formControl.setValue(val);
     this._updateValue(val);
   }
 
-  onKeyDown(ev: KeyboardEvent): void {
-    if (ev.key === 'Enter') {
-      const val = (ev.target as HTMLInputElement).value;
-      this._updateValue(val);
+  override ngOnDestroy(): void {
+    if (this._timeout) {
+      window.clearTimeout(this._timeout);
     }
   }
 
   private _updateValue(val: string): void {
-    this.formControl.setValue(val ? stringToMs(val) : null);
-    this.input().nativeElement.value = val;
-    setTimeout(() => {
-      const input = this.input();
-      if (input.nativeElement.value !== val) {
-        input.nativeElement.value = val;
-      }
+    this._timeout = window.setTimeout(() => {
+      this.formControl.setValue(val ? stringToMs(val) : undefined);
     });
   }
 }

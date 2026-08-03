@@ -19,8 +19,11 @@ import { Task, TaskCopy, TimeSpentOnDayCopy } from '../task.model';
 import { TaskService } from '../task.service';
 import { getTodayStr } from '../util/get-today-str';
 import { createTaskCopy } from '../util/create-task-copy';
-import { DialogAddTimeEstimateForOtherDayComponent } from '../dialog-add-time-estimate-for-other-day/dialog-add-time-estimate-for-other-day.component';
-import { getWorklogStr } from '../../../util/get-work-log-str';
+import {
+  DialogAddTimeEstimateForOtherDayComponent,
+  NewTimeEntry,
+} from '../dialog-add-time-estimate-for-other-day/dialog-add-time-estimate-for-other-day.component';
+import { getDbDateStr } from '../../../util/get-db-date-str';
 import { T } from '../../../t.const';
 import { FormsModule } from '@angular/forms';
 import { HelpSectionComponent } from '../../../ui/help-section/help-section.component';
@@ -32,6 +35,8 @@ import { InputDurationDirective } from '../../../ui/duration/input-duration.dire
 import { MatInput } from '@angular/material/input';
 import { KeysPipe } from '../../../ui/pipes/keys.pipe';
 import { TranslatePipe } from '@ngx-translate/core';
+import { LocaleDatePipe } from '../../../ui/pipes/locale-date.pipe';
+import { DateTimeFormatService } from '../../../core/date-time-format/date-time-format.service';
 
 @Component({
   selector: 'dialog-time-estimate',
@@ -56,6 +61,7 @@ import { TranslatePipe } from '@ngx-translate/core';
     MatDialogClose,
     KeysPipe,
     TranslatePipe,
+    LocaleDatePipe,
   ],
 })
 export class DialogTimeEstimateComponent implements AfterViewInit {
@@ -64,7 +70,12 @@ export class DialogTimeEstimateComponent implements AfterViewInit {
   private _taskService = inject(TaskService);
   private _cd = inject(ChangeDetectorRef);
   private _el = inject(ElementRef);
+  private _dateTimeFormatService = inject(DateTimeFormatService);
   data = inject(MAT_DIALOG_DATA);
+
+  // Exposed so the template can pass the reactive locale to the now-pure
+  // `localeDate` pipe, preserving re-render on a locale change.
+  readonly locale = this._dateTimeFormatService.currentLocale;
 
   T: typeof T = T;
   todayStr: string;
@@ -103,11 +114,11 @@ export class DialogTimeEstimateComponent implements AfterViewInit {
     this._matDialog
       .open(DialogAddTimeEstimateForOtherDayComponent)
       .afterClosed()
-      .subscribe((result) => {
+      .subscribe((result: NewTimeEntry) => {
         if (result && result.timeSpent > 0 && result.date) {
           this.timeSpentOnDayCopy = {
             ...this.timeSpentOnDayCopy,
-            [getWorklogStr(result.date)]: result.timeSpent,
+            [getDbDateStr(result.date)]: result.timeSpent,
           };
           this.taskCopy.timeSpentOnDay = this.timeSpentOnDayCopy;
           this._cd.detectChanges();
@@ -116,7 +127,12 @@ export class DialogTimeEstimateComponent implements AfterViewInit {
   }
 
   deleteValue(strDate: string): void {
-    delete this.timeSpentOnDayCopy[strDate];
+    // Replace the reference (rather than mutating in place) so the now-pure
+    // `keys` pipe re-runs and the deleted row is removed from the view.
+    const rest = { ...this.timeSpentOnDayCopy };
+    delete rest[strDate];
+    this.timeSpentOnDayCopy = rest;
+    this.taskCopy.timeSpentOnDay = this.timeSpentOnDayCopy;
   }
 
   trackByIndex(i: number, p: any): number {

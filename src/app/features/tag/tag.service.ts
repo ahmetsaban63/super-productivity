@@ -1,8 +1,8 @@
-import { Injectable, inject } from '@angular/core';
+import { computed, Injectable, inject } from '@angular/core';
 import { Action, select, Store } from '@ngrx/store';
 import {
   selectAllTags,
-  selectAllTagsWithoutMyDayAndNoList,
+  selectAllTagsWithoutMyDay,
   selectTagById,
   selectTagsByIds,
 } from './store/tag.reducer';
@@ -12,23 +12,47 @@ import {
   deleteTags,
   updateTag,
   updateTagOrder,
-  upsertTag,
 } from './store/tag.actions';
 import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { Tag, TagState } from './tag.model';
 import { nanoid } from 'nanoid';
 import { DEFAULT_TAG } from './tag.const';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { sortByTitle } from '../../util/sort-by-title';
+import { getRandomWorkContextColor } from '../work-context/work-context-color';
+import { DeletedTagTitlesSidecarService } from '../issue/two-way-sync/deleted-tag-titles-sidecar.service';
+import { MenuTreeService } from '../menu-tree/menu-tree.service';
 
 @Injectable({
   providedIn: 'root',
 })
 export class TagService {
   private _store$ = inject<Store<TagState>>(Store);
+  private _deletedTagTitlesSidecar = inject(DeletedTagTitlesSidecarService);
+  private _menuTreeService = inject(MenuTreeService);
 
   tags$: Observable<Tag[]> = this._store$.pipe(select(selectAllTags));
-  tagsNoMyDayAndNoList$: Observable<Tag[]> = this._store$.pipe(
-    select(selectAllTagsWithoutMyDayAndNoList),
+  tags = toSignal(this.tags$, { initialValue: [] });
+  tagsInTreeOrder = computed(() =>
+    this._menuTreeService.buildTagListInTreeOrder(this.tags()),
   );
+  tagsSortedForUI$: Observable<Tag[]> = this.tags$.pipe(map((tags) => sortByTitle(tags)));
+  tagsSortedForUI = toSignal(this.tagsSortedForUI$, { initialValue: [] });
+
+  tagsNoMyDayAndNoList$: Observable<Tag[]> = this._store$.pipe(
+    select(selectAllTagsWithoutMyDay),
+  );
+  tagsNoMyDayAndNoList = toSignal(this.tagsNoMyDayAndNoList$, { initialValue: [] });
+  tagsNoMyDayAndNoListInTreeOrder = computed(() =>
+    this._menuTreeService.buildTagListInTreeOrder(this.tagsNoMyDayAndNoList()),
+  );
+  tagsNoMyDayAndNoListSorted$: Observable<Tag[]> = this.tagsNoMyDayAndNoList$.pipe(
+    map((tags) => sortByTitle(tags)),
+  );
+  tagsNoMyDayAndNoListSorted = toSignal(this.tagsNoMyDayAndNoListSorted$, {
+    initialValue: [],
+  });
 
   getTagById$(id: string): Observable<Tag> {
     return this._store$.pipe(select(selectTagById, { id }));
@@ -45,11 +69,14 @@ export class TagService {
   }
 
   deleteTag(id: string): void {
+    // Sidecar before dispatch so the push-on-delete effect can find titles
+    // without persisting them into the op-log action payload (rule 9).
+    this._deletedTagTitlesSidecar.set(this._getTagTitlesByIds([id]));
     this._store$.dispatch(deleteTag({ id }));
   }
 
   removeTag(id: string): void {
-    this._store$.dispatch(deleteTag({ id }));
+    this.deleteTag(id);
   }
 
   updateColor(id: string, color: string): void {
@@ -61,6 +88,7 @@ export class TagService {
   }
 
   deleteTags(ids: string[]): void {
+    this._deletedTagTitlesSidecar.set(this._getTagTitlesByIds(ids));
     this._store$.dispatch(deleteTags({ ids }));
   }
 
@@ -68,26 +96,36 @@ export class TagService {
     this._store$.dispatch(updateTag({ tag: { id, changes } }));
   }
 
-  upsertTag(tag: Tag): void {
-    this._store$.dispatch(upsertTag({ tag }));
+  createTagObject(tag: Partial<Tag>): Tag {
+    const id = tag.id || nanoid();
+    return {
+      ...DEFAULT_TAG,
+      id,
+      title: tag.title || 'EMPTY',
+      created: Date.now(),
+      icon: null,
+      taskIds: [],
+      ...tag,
+      color: tag.color || getRandomWorkContextColor(),
+    };
   }
 
   getAddTagActionAndId(tag: Partial<Tag>): { action: Action<any>; id: string } {
-    const id = nanoid();
+    const newTag = this.createTagObject(tag);
     return {
-      id,
-      action: addTag({
-        tag: {
-          ...DEFAULT_TAG,
-          id,
-          title: tag.title || 'EMPTY',
-          created: Date.now(),
-          icon: null,
-          color: tag.color || null,
-          taskIds: [],
-          ...tag,
-        },
-      }),
+      id: newTag.id,
+      action: addTag({ tag: newTag }),
     };
+  }
+
+  private _getTagTitlesByIds(ids: string[]): string[] {
+    const idSet = new Set(ids);
+    try {
+      return this.tags()
+        .filter((tag) => idSet.has(tag.id))
+        .map((tag) => tag.title);
+    } catch {
+      return [];
+    }
   }
 }

@@ -9,27 +9,17 @@ import {
 import { T } from '../../../t.const';
 import { FormsModule } from '@angular/forms';
 import { HelpSectionComponent } from '../../../ui/help-section/help-section.component';
-import {
-  MatError,
-  MatFormField,
-  MatLabel,
-  MatPrefix,
-} from '@angular/material/form-field';
-import { MatInput } from '@angular/material/input';
-import {
-  MatDatepicker,
-  MatDatepickerInput,
-  MatDatepickerToggle,
-} from '@angular/material/datepicker';
 import { InputDurationSliderComponent } from '../../../ui/duration/input-duration-slider/input-duration-slider.component';
 import { MatButton } from '@angular/material/button';
 import { MatIcon } from '@angular/material/icon';
-import { DatePipe } from '@angular/common';
+import { LocaleDatePipe } from 'src/app/ui/pipes/locale-date.pipe';
 import { TranslatePipe } from '@ngx-translate/core';
+import { DateTimeFormatService } from 'src/app/core/date-time-format/date-time-format.service';
+import { DatePickerInputComponent } from '../../../ui/date-picker-input/date-picker-input.component';
 
-interface NewTimeEntry {
+export interface NewTimeEntry {
   timeSpent: number;
-  date: string;
+  date: Date | null;
 }
 
 @Component({
@@ -42,36 +32,30 @@ interface NewTimeEntry {
     FormsModule,
     MatDialogContent,
     HelpSectionComponent,
-    MatFormField,
-    MatLabel,
-    MatInput,
-    MatDatepickerInput,
-    MatError,
-    MatDatepickerToggle,
-    MatPrefix,
-    MatDatepicker,
     InputDurationSliderComponent,
     MatDialogActions,
     MatButton,
     MatDialogClose,
     MatIcon,
-    DatePipe,
+    LocaleDatePipe,
     TranslatePipe,
+    DatePickerInputComponent,
   ],
 })
 export class DialogAddTimeEstimateForOtherDayComponent {
+  public dateTimeFormatService = inject(DateTimeFormatService);
   private _matDialogRef =
     inject<MatDialogRef<DialogAddTimeEstimateForOtherDayComponent>>(MatDialogRef);
 
-  T: typeof T = T;
-  newEntry: NewTimeEntry;
+  // Exposed so the template can pass the reactive locale to the now-pure
+  // `localeDate` pipe, preserving re-render on a locale change.
+  readonly locale = this.dateTimeFormatService.currentLocale;
 
-  constructor() {
-    this.newEntry = {
-      date: '',
-      timeSpent: 0,
-    };
-  }
+  T: typeof T = T;
+  newEntry: NewTimeEntry = {
+    date: null,
+    timeSpent: 0,
+  };
 
   submit(): void {
     this._matDialogRef.close(this.newEntry);

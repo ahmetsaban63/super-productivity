@@ -1,105 +1,165 @@
-@import '../../../../variables';
-@import '../../tasks/task/task.component.mixins';
+@use '../../../../styles/_globals.scss' as *;
+@use '../../tasks/task/task.component.mixins' as *;
 
 :host {
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   min-width: 260px;
   width: 260px;
+  overflow: hidden;
+  padding-inline: var(--s);
+  border-inline-start: 1px solid var(--divider-color);
   // there needs to be enough space for the fab buttons
 
   padding-bottom: 96px;
-  margin-bottom: 32px;
+  margin-bottom: var(--s4);
+
+  @include mq(xs, max) {
+    width: 100%;
+    max-width: 100%;
+    min-width: 100%;
+    padding: 0;
+    margin-bottom: var(--s2);
+    border-inline-start: none;
+  }
 }
 
 :host header {
-  margin-top: 16px;
-  margin-right: -4px;
-  margin-left: -4px;
-  border-radius: 8px;
-  //position: sticky;
-  //top: -2px;
-  //&.is-stuck {
-  //  background: white;
-  //  box-shadow: $whiteframe-shadow-2dp;
-  //  z-index: 10;
-  //}
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--s-half) var(--s);
+  margin-top: var(--s);
+  padding: var(--s) 0 var(--s-half);
+
+  @include mq(xs, max) {
+    margin-top: 0;
+    padding: var(--s) 0 var(--s-half);
+  }
 }
 
 .day-title {
-  font-size: 22px;
-  text-align: center;
-  font-weight: bold;
-  vertical-align: middle;
-  padding-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  gap: var(--s-half);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-snug);
+  white-space: nowrap;
 
   .date {
-    font-size: 12px;
+    color: var(--text-color-muted);
+    font-size: var(--font-size-sm);
+    font-weight: normal;
+  }
+
+  mat-icon {
+    flex-shrink: 0;
+    width: var(--font-size-lg);
+    height: var(--font-size-lg);
+    font-size: var(--font-size-lg);
   }
 }
 
 .day-counts {
   display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
   justify-content: center;
   align-items: center;
-  padding: 8px 0;
-  border-radius: 4px;
-  font-size: 18px;
+  color: var(--text-color-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
 
   mat-icon:last-of-type {
-    margin-left: 8px;
-    font-size: 16px;
+    margin-left: var(--s);
+    width: var(--font-size-lg);
+    height: var(--font-size-lg);
+    font-size: var(--font-size-lg);
+  }
+
+  .day-load {
+    min-width: 0;
+    text-align: center;
   }
 }
 
-.day-estimate {
-  margin-top: 8px;
-  font-size: 16px;
-  text-align: center;
+.progress-container {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: var(--s-half);
+  position: relative;
 }
 
 .section-title {
   display: flex;
-  justify-content: center;
-  margin: 12px 0 8px;
+  align-items: center;
+  justify-content: flex-start;
+  margin: var(--s) 0 var(--s-half);
+  color: var(--text-color-muted);
+
+  mat-icon {
+    width: var(--planner-item-ico-size);
+    height: var(--planner-item-ico-size);
+    font-size: var(--planner-item-ico-size);
+  }
 }
 
 .normal-tasks,
-.scheduled {
-  margin-top: 4px;
+.scheduled,
+.deadlines {
+  margin-top: var(--s-half);
   display: flex;
   flex-direction: column;
 }
 
-.scheduled {
+.scheduled,
+.deadlines {
   flex-grow: 1;
-  /* Additional styles if needed */
-  margin-top: 16px;
+  margin-top: var(--s);
+
+  &.no-items {
+    flex-grow: 0;
+    margin-top: var(--s-half);
+  }
+
+  @include mq(xs, max) {
+    &.no-items {
+      display: none;
+    }
+  }
 }
 
 .normal-tasks-items,
-.scheduled-items {
-  min-height: $planner-item-height;
+.deadline-items {
+  min-height: var(--planner-item-height);
   flex-grow: 1;
 }
 
-.normal-tasks-items > * {
-  margin-bottom: 8px;
+.scheduled-items {
+  min-height: calc(var(--planner-item-height) * 0.5);
+  flex-grow: 1;
+}
+
+.normal-tasks-items > *,
+.deadline-items > * {
+  // Match the main task list's inter-row rhythm (its .box is inset ~4px), rather
+  // than the roomier 8px, so planner and task-list spacing read the same.
+  margin-bottom: var(--s-half);
 }
 
 .scheduled-item {
   display: flex;
   align-items: center;
-  margin-bottom: 8px;
+  margin-bottom: var(--s);
 
   &.Task .time {
     cursor: pointer;
     border-radius: 50%;
-    background: #fff;
-
-    @include darkTheme() {
-      background: $task-c-bg-dark;
-    }
+    background: var(--task-c-bg);
   }
 
   .time {
@@ -108,16 +168,16 @@
     width: 40px;
     height: 40px;
     min-width: 40px;
-    margin-right: 4px;
+    margin-right: var(--s-half);
     flex-grow: 0;
     display: flex;
     justify-content: center;
     align-items: center;
 
-    font-size: $planner-font-size-smaller-mobile;
+    font-size: var(--planner-font-size-smaller-mobile);
 
     @include mq(xs) {
-      font-size: $planner-font-size-smaller;
+      font-size: var(--planner-font-size-smaller);
     }
 
     mat-icon {
@@ -150,12 +210,21 @@
 
   > :nth-child(2) {
     flex-grow: 1;
+    min-width: 0;
   }
 }
 
 .empty {
-  text-align: center;
-  font-style: italic;
-  line-height: $planner-item-height;
-  height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--planner-item-height);
+  padding-inline: var(--s);
+  color: var(--text-color-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-snug);
+}
+
+.all-day-event {
+  opacity: 0.8;
 }

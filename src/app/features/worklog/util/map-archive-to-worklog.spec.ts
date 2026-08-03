@@ -27,6 +27,7 @@ describe('mapArchiveToWorklog', () => {
     const ts = fakeTaskStateFromArray([
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'A',
         id: 'A',
         timeSpent: 13332,
@@ -37,7 +38,7 @@ describe('mapArchiveToWorklog', () => {
       },
     ]);
 
-    const r = mapArchiveToWorklog(ts, [], START_END_ALL);
+    const r = mapArchiveToWorklog(ts, [], START_END_ALL, 1, 'en-US');
     const w: Worklog = r.worklog;
 
     expect(r.totalTimeSpent).toBe(13332);
@@ -63,6 +64,7 @@ describe('mapArchiveToWorklog', () => {
     const ts = fakeTaskStateFromArray([
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'A',
         id: 'A',
         subTaskIds: ['SUB_B', 'SUB_C'],
@@ -74,6 +76,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_B',
         id: 'SUB_B',
         parentId: 'A',
@@ -83,6 +86,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_C',
         id: 'SUB_C',
         parentId: 'A',
@@ -92,7 +96,7 @@ describe('mapArchiveToWorklog', () => {
       },
     ]);
 
-    const r = mapArchiveToWorklog(ts, [], START_END_ALL);
+    const r = mapArchiveToWorklog(ts, [], START_END_ALL, 1, 'en-US');
     const w: Worklog = r.worklog;
 
     expect(r.totalTimeSpent).toBe(13332);
@@ -120,6 +124,7 @@ describe('mapArchiveToWorklog', () => {
     const ts = fakeTaskStateFromArray([
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'PT1',
         id: 'PT1',
         subTaskIds: ['SUB_A', 'SUB_B'],
@@ -130,6 +135,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'MT1',
         id: 'MT1',
         subTaskIds: [],
@@ -140,6 +146,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_A',
         id: 'SUB_A',
         parentId: 'PT1',
@@ -150,6 +157,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_B',
         id: 'SUB_B',
         parentId: 'PT1',
@@ -160,7 +168,7 @@ describe('mapArchiveToWorklog', () => {
       },
     ]);
 
-    const r = mapArchiveToWorklog(ts, [], START_END_ALL);
+    const r = mapArchiveToWorklog(ts, [], START_END_ALL, 1, 'en-US');
     const w: Worklog = r.worklog;
 
     expect(r.totalTimeSpent).toBe(13333);
@@ -169,15 +177,18 @@ describe('mapArchiveToWorklog', () => {
     expect(w[2015].ent[1].ent[15].timeSpent).toBe(13333);
 
     expect(w[2015].ent[1].ent[15].logEntries.length).toBe(4);
-    expect(w[2015].ent[1].ent[15].logEntries[0].task.id).toBe('PT1');
-    expect(w[2015].ent[1].ent[15].logEntries[1].task.id).toBe('SUB_A');
-    expect(w[2015].ent[1].ent[15].logEntries[2].task.id).toBe('SUB_B');
+    // With alphabetical sorting: MT1 comes before PT1
+    expect(w[2015].ent[1].ent[15].logEntries[0].task.id).toBe('MT1');
+    expect(w[2015].ent[1].ent[15].logEntries[1].task.id).toBe('PT1');
+    expect(w[2015].ent[1].ent[15].logEntries[2].task.id).toBe('SUB_A');
+    expect(w[2015].ent[1].ent[15].logEntries[3].task.id).toBe('SUB_B');
   });
 
   it('should work for sub tasks and parents spanning over multiple days', () => {
     const ts = fakeTaskStateFromArray([
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'PT1',
         id: 'PT1',
         subTaskIds: ['SUB_A', 'SUB_B', 'SUB_C'],
@@ -192,6 +203,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_A',
         id: 'SUB_A',
         parentId: 'PT1',
@@ -206,6 +218,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_B',
         id: 'SUB_B',
         parentId: 'PT1',
@@ -219,6 +232,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_C',
         id: 'SUB_C',
         parentId: 'PT1',
@@ -233,7 +247,7 @@ describe('mapArchiveToWorklog', () => {
       },
     ]);
 
-    const r = mapArchiveToWorklog(ts, [], START_END_ALL);
+    const r = mapArchiveToWorklog(ts, [], START_END_ALL, 1, 'en-US');
     const w: Worklog = r.worklog;
 
     expect(r.totalTimeSpent).toBe(21366);
@@ -254,14 +268,16 @@ describe('mapArchiveToWorklog', () => {
     expect(w[2021].ent[6].ent[8].logEntries.length).toBe(4);
     expect(w[2021].ent[6].ent[8].logEntries[0].task.id).toBe('PT1');
     expect(w[2021].ent[6].ent[8].logEntries[1].task.id).toBe('SUB_A');
-    expect(w[2021].ent[6].ent[8].logEntries[2].task.id).toBe('SUB_C');
-    expect(w[2021].ent[6].ent[8].logEntries[3].task.id).toBe('SUB_B');
+    // With alphabetical sorting: SUB_B comes before SUB_C
+    expect(w[2021].ent[6].ent[8].logEntries[2].task.id).toBe('SUB_B');
+    expect(w[2021].ent[6].ent[8].logEntries[3].task.id).toBe('SUB_C');
   });
 
   it('should work for sub tasks with zero time worked', () => {
     const ts = fakeTaskStateFromArray([
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'PT1',
         id: 'PT1',
         subTaskIds: ['SUB_A', 'SUB_B', 'SUB_C'],
@@ -276,6 +292,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_A',
         id: 'SUB_A',
         parentId: 'PT1',
@@ -291,6 +308,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_B',
         id: 'SUB_B',
         parentId: 'PT1',
@@ -304,6 +322,7 @@ describe('mapArchiveToWorklog', () => {
       },
       {
         ...DEFAULT_TASK,
+        projectId: 'P1',
         title: 'SUB_C',
         id: 'SUB_C',
         parentId: 'PT1',
@@ -319,7 +338,7 @@ describe('mapArchiveToWorklog', () => {
       },
     ]);
 
-    const r = mapArchiveToWorklog(ts, [], START_END_ALL);
+    const r = mapArchiveToWorklog(ts, [], START_END_ALL, 1, 'en-US');
     const w: Worklog = r.worklog;
 
     expect(r.totalTimeSpent).toBe(21366);
@@ -340,7 +359,8 @@ describe('mapArchiveToWorklog', () => {
     expect(w[2021].ent[6].ent[8].logEntries.length).toBe(4);
     expect(w[2021].ent[6].ent[8].logEntries[0].task.id).toBe('PT1');
     expect(w[2021].ent[6].ent[8].logEntries[1].task.id).toBe('SUB_A');
-    expect(w[2021].ent[6].ent[8].logEntries[2].task.id).toBe('SUB_C');
-    expect(w[2021].ent[6].ent[8].logEntries[3].task.id).toBe('SUB_B');
+    // With alphabetical sorting: SUB_B comes before SUB_C
+    expect(w[2021].ent[6].ent[8].logEntries[2].task.id).toBe('SUB_B');
+    expect(w[2021].ent[6].ent[8].logEntries[3].task.id).toBe('SUB_C');
   });
 });

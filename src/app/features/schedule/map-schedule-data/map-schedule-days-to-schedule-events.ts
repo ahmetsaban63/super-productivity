@@ -16,24 +16,31 @@ export const mapScheduleDaysToScheduleEvents = (
 
   days.forEach((day, dayIndex) => {
     beyondBudgetDays[dayIndex] = day.beyondBudgetTasks.map((taskPlannedForDay) => {
-      // eslint-disable-next-line no-mixed-operators
       const timeLeft = getTimeLeftForTask(taskPlannedForDay);
       const timeLeftInHours = timeLeft / 1000 / 60 / 60;
-      const rowSpan = Math.max(Math.round(timeLeftInHours * FH), 1);
+      const plannedForDay =
+        (taskPlannedForDay as TaskWithPlannedForDayIndication).plannedForDay ||
+        taskPlannedForDay.dueDay ||
+        day.dayDate;
       return {
         id: taskPlannedForDay.id,
-        dayOfMonth: undefined,
+        dayOfMonth: getDayOfMonth(plannedForDay),
         data: taskPlannedForDay,
         type: SVEType.TaskPlannedForDay,
-        style: `height: ${rowSpan * 8}px`,
+        style: '',
         timeLeftInHours,
-        isCloseToOthers: false,
-        isCloseToOthersFirst: false,
         startHours: 0,
+        plannedForDay,
+        isBeyondBudget: true,
       };
     });
 
-    day.entries.forEach((entry, entryIndex) => {
+    const activeEntries: (
+      | { entry: (typeof day.entries)[number]; eventIndex: number }
+      | undefined
+    )[] = [];
+
+    day.entries.forEach((entry) => {
       if (entry.type !== SVEType.WorkdayEnd && entry.type !== SVEType.WorkdayStart) {
         const start = new Date(entry.start);
         const startHour = start.getHours();
@@ -45,43 +52,84 @@ export const mapScheduleDaysToScheduleEvents = (
         const startRow = Math.round(hoursToday * FH) + 1;
         const timeLeft = entry.duration;
 
-        const entryBefore = day.entries[entryIndex - 1];
-        const diff = entry.start - entryBefore?.start;
-        // const isCloseToOthers = entryBefore && diff <= 5 * 60 * 1000 && diff >= 0;
-        const isCloseToOthers = !!entryBefore && diff === 0;
-        if (
-          isCloseToOthers &&
-          eventsFlat[eventsFlat.length - 1] &&
-          !eventsFlat[eventsFlat.length - 1].isCloseToOthers
-        ) {
-          eventsFlat[eventsFlat.length - 1].isCloseToOthers = true;
-          eventsFlat[eventsFlat.length - 1].isCloseToOthersFirst = true;
-        }
-
         // NOTE since we only use getMinutes we also need to floor the minutes for timeLeftInHours
         const timeLeftInHours = Math.floor(timeLeft / 1000 / 60) / 60;
         const rowSpan = Math.max(1, Math.round(timeLeftInHours * FH));
 
+        const eventIndex = eventsFlat.length;
         eventsFlat.push({
-          dayOfMonth:
-            ((entry.data as TaskWithPlannedForDayIndication)?.plannedForDay &&
-              dateStrToUtcDate(
-                (entry.data as TaskWithPlannedForDayIndication)?.plannedForDay,
-              ).getDate()) ||
-            undefined,
+          dayOfMonth: getDayOfMonth(
+            (entry.data as TaskWithPlannedForDayIndication)?.plannedForDay,
+          ),
           id: entry.id,
           type: entry.type as SVEType,
           startHours: hoursToday,
           timeLeftInHours,
-          isCloseToOthers,
-          isCloseToOthersFirst: false,
-          // title: entry.data.title,
           style: `grid-column: ${dayIndex + 2};  grid-row: ${startRow} / span ${rowSpan}`,
           data: entry.data,
+          plannedForDay: entry.plannedForDay,
+          ...(entry.sourceOccurrenceDate
+            ? { sourceOccurrenceDate: entry.sourceOccurrenceDate }
+            : {}),
+          isBeyondBudget: entry.isBeyondBudget,
         });
+
+        let overlapCount = 0;
+        for (let i = 0; i < activeEntries.length; i++) {
+          const activeEntry = activeEntries[i];
+          if (!activeEntry) {
+            continue;
+          }
+          const entryEnd = entry.start + Math.max(entry.duration, 1);
+          const activeEnd =
+            activeEntry.entry.start + Math.max(activeEntry.entry.duration, 1);
+          if (entryEnd <= activeEntry.entry.start || activeEnd <= entry.start) {
+            delete activeEntries[i];
+          } else {
+            overlapCount += 1;
+          }
+        }
+
+        let nextInactiveSlot = activeEntries.findIndex((s) => !s);
+        if (nextInactiveSlot === -1) {
+          nextInactiveSlot = activeEntries.length === 0 ? 0 : activeEntries.length;
+        }
+
+        activeEntries[nextInactiveSlot] = { entry, eventIndex };
+
+        if (overlapCount > 0 || nextInactiveSlot > 0) {
+          const activeEventSlots = activeEntries
+            .map((activeEntry, offset) => ({ activeEntry, offset }))
+            .filter(
+              (
+                activeEventSlot,
+              ): activeEventSlot is {
+                activeEntry: { entry: (typeof day.entries)[number]; eventIndex: number };
+                offset: number;
+              } => !!activeEventSlot.activeEntry,
+            );
+          const laneCount = Math.max(
+            ...activeEventSlots.map(({ activeEntry, offset }) =>
+              Math.max(
+                offset + 1,
+                eventsFlat[activeEntry.eventIndex].overlap?.count ?? 1,
+              ),
+            ),
+          );
+
+          activeEventSlots.forEach(({ activeEntry, offset }) => {
+            eventsFlat[activeEntry.eventIndex].overlap = {
+              count: laneCount,
+              offset,
+            };
+          });
+        }
       }
     });
   });
 
   return { eventsFlat, beyondBudgetDays };
 };
+
+const getDayOfMonth = (dayDate: string | undefined): number | undefined =>
+  dayDate ? dateStrToUtcDate(dayDate).getDate() : undefined;

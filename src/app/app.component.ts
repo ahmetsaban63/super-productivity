@@ -1,63 +1,102 @@
 import {
+  AfterViewInit,
   ChangeDetectionStrategy,
   Component,
+  computed,
+  DestroyRef,
+  effect,
+  ElementRef,
   HostBinding,
   HostListener,
   inject,
+  NgZone,
   OnDestroy,
+  signal,
+  ViewChild,
 } from '@angular/core';
-import { ChromeExtensionInterfaceService } from './core/chrome-extension-interface/chrome-extension-interface.service';
+import { toSignal } from '@angular/core/rxjs-interop';
 import { ShortcutService } from './core-ui/shortcut/shortcut.service';
 import { GlobalConfigService } from './features/config/global-config.service';
+import { TaskWidgetSettingsService } from './features/config/task-widget-settings.service';
 import { LayoutService } from './core-ui/layout/layout.service';
-import { IPC } from '../../electron/shared-with-frontend/ipc-events.const';
 import { SnackService } from './core/snack/snack.service';
-import { IS_ELECTRON, LanguageCode } from './app.constants';
+import { IS_ELECTRON } from './app.constants';
+import { IS_MAC } from './util/is-mac';
 import { expandAnimation } from './ui/animations/expand.ani';
 import { warpRouteAnimation } from './ui/animations/warp-route';
-import { combineLatest, Observable, Subscription } from 'rxjs';
+import { firstValueFrom, Subscription } from 'rxjs';
 import { fadeAnimation } from './ui/animations/fade.ani';
 import { BannerService } from './core/banner/banner.service';
 import { LS } from './core/persistence/storage-keys.const';
 import { BannerId } from './core/banner/banner.model';
 import { T } from './t.const';
 import { GlobalThemeService } from './core/theme/global-theme.service';
-import { UiHelperService } from './features/ui-helper/ui-helper.service';
+import { resolveBgImageToDataUrl } from './core/theme/resolve-bg-image-to-data-url.util';
 import { LanguageService } from './core/language/language.service';
 import { WorkContextService } from './features/work-context/work-context.service';
-import { ImexMetaService } from './imex/imex-meta/imex-meta.service';
-import { AndroidService } from './features/android/android.service';
-import { IS_ANDROID_WEB_VIEW } from './util/is-android-web-view';
-import { isOnline$ } from './util/is-online';
 import { SyncTriggerService } from './imex/sync/sync-trigger.service';
-import { environment } from '../environments/environment';
 import { ActivatedRoute, RouterOutlet } from '@angular/router';
-import { TrackingReminderService } from './features/tracking-reminder/tracking-reminder.service';
-import { map, skip, take } from 'rxjs/operators';
+import { concatMap, first, take } from 'rxjs/operators';
+
 import { IS_MOBILE } from './util/is-mobile';
+import { recordSearchNavDebug } from './util/search-nav-debug';
 import { warpAnimation, warpInAnimation } from './ui/animations/warp.ani';
-import { GlobalConfigState } from './features/config/global-config.model';
-import { AddTaskBarComponent } from './features/tasks/add-task-bar/add-task-bar.component';
-import { SearchBarComponent } from './features/search-bar/search-bar.component';
 import {
-  MatSidenav,
-  MatSidenavContainer,
-  MatSidenavContent,
-} from '@angular/material/sidenav';
+  AddTaskBarComponent,
+  TaskAddEvent,
+} from './features/tasks/add-task-bar/add-task-bar.component';
 import { Dir } from '@angular/cdk/bidi';
-import { SideNavComponent } from './core-ui/side-nav/side-nav.component';
+import { MagicSideNavComponent } from './core-ui/magic-side-nav/magic-side-nav.component';
 import { MainHeaderComponent } from './core-ui/main-header/main-header.component';
-import { BookmarkBarComponent } from './features/bookmark/bookmark-bar/bookmark-bar.component';
 import { BannerComponent } from './core/banner/banner/banner.component';
 import { GlobalProgressBarComponent } from './core-ui/global-progress-bar/global-progress-bar.component';
 import { FocusModeOverlayComponent } from './features/focus-mode/focus-mode-overlay/focus-mode-overlay.component';
-import { ShepherdComponent } from './features/shepherd/shepherd.component';
-import { AsyncPipe } from '@angular/common';
-import { selectIsFocusOverlayShown } from './features/focus-mode/store/focus-mode.selectors';
+import { DOCUMENT } from '@angular/common';
+import { RightPanelComponent } from './features/right-panel/right-panel.component';
+import { selectIsOverlayShown } from './features/focus-mode/store/focus-mode.selectors';
 import { Store } from '@ngrx/store';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
+import { MatDialog } from '@angular/material/dialog';
+import { MarkdownPasteService } from './features/tasks/markdown-paste.service';
+import { TaskService } from './features/tasks/task.service';
+import { TaskAttachmentService } from './features/tasks/task-attachment/task-attachment.service';
+import { MatMenuItem } from '@angular/material/menu';
+import { MatIcon } from '@angular/material/icon';
+import { NoteStartupBannerService } from './features/note/note-startup-banner.service';
+import { SyncSafetyBannerService } from './imex/sync/sync-safety-banner.service';
+import { SuperSyncEncryptionMigrationBannerService } from './imex/sync/super-sync-encryption-migration-banner.service';
+import { ProjectService } from './features/project/project.service';
+import { TagService } from './features/tag/tag.service';
+import { ContextMenuComponent } from './ui/context-menu/context-menu.component';
+import { WorkContextType } from './features/work-context/work-context.model';
+import { SectionService } from './features/section/section.service';
+import { DialogPromptComponent } from './ui/dialog-prompt/dialog-prompt.component';
+import { TODAY_TAG } from './features/tag/tag.const';
+import { openWorkContextSettingsDialog } from './features/work-context/dialog-work-context-settings/open-work-context-settings-dialog';
+import { isInputElement } from './util/dom-element';
+import { getDroppedUrl } from './core/drop-paste-input/drop-paste-input';
+import { readableUrl } from './util/readable-url';
+import { MobileBottomNavComponent } from './core-ui/mobile-bottom-nav/mobile-bottom-nav.component';
+import { StartupService } from './core/startup/startup.service';
+import { DataInitStateService } from './core/data-init/data-init-state.service';
+import { AppUriTaskActionsService } from './features/tasks/app-uri-actions/app-uri-task-actions.service';
+import { ExampleTasksService } from './core/example-tasks/example-tasks.service';
+import { KeyboardLayoutService } from './core/keyboard-layout/keyboard-layout.service';
+import { setKeyboardLayoutService } from './util/check-key-combo';
+import { OnboardingPresetSelectionComponent } from './features/onboarding/onboarding-preset-selection.component';
+import { OnboardingHintComponent } from './features/onboarding/onboarding-hint.component';
+import { OnboardingHintService } from './features/onboarding/onboarding-hint.service';
+import { MaterialIconsLoaderService } from './ui/material-icons-loader.service';
+import { BrowserTitleService } from './core/browser-title/browser-title.service';
 
-const w = window as any;
-const productivityTip: string[] = w.productivityTips && w.productivityTips[w.randomIndex];
+const ONBOARDING_PRESET_EXIT_DELAY = 1000;
+const ONBOARDING_ENTRANCE_COMPLETE_DELAY = 2000;
+const ENTRANCE_ANIMATION_DURATION = 1500;
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
+}
 
 @Component({
   selector: 'app-root',
@@ -73,82 +112,151 @@ const productivityTip: string[] = w.productivityTips && w.productivityTips[w.ran
   changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     AddTaskBarComponent,
-    SearchBarComponent,
-    MatSidenavContainer,
     Dir,
-    MatSidenav,
-    SideNavComponent,
-    MatSidenavContent,
+    MagicSideNavComponent,
     MainHeaderComponent,
-    BookmarkBarComponent,
     BannerComponent,
+    RightPanelComponent,
     RouterOutlet,
     GlobalProgressBarComponent,
     FocusModeOverlayComponent,
-    ShepherdComponent,
-    AsyncPipe,
+    MatMenuItem,
+    MatIcon,
+    TranslatePipe,
+    ContextMenuComponent,
+    MobileBottomNavComponent,
+    OnboardingPresetSelectionComponent,
+    OnboardingHintComponent,
   ],
 })
-export class AppComponent implements OnDestroy {
+export class AppComponent implements OnDestroy, AfterViewInit {
   private _globalConfigService = inject(GlobalConfigService);
   private _shortcutService = inject(ShortcutService);
   private _bannerService = inject(BannerService);
   private _snackService = inject(SnackService);
-  private _chromeExtensionInterfaceService = inject(ChromeExtensionInterfaceService);
   private _globalThemeService = inject(GlobalThemeService);
-  private _uiHelperService = inject(UiHelperService);
   private _languageService = inject(LanguageService);
-  private _androidService = inject(AndroidService);
-  private _startTrackingReminderService = inject(TrackingReminderService);
   private _activatedRoute = inject(ActivatedRoute);
-  readonly syncTriggerService = inject(SyncTriggerService);
-  readonly imexMetaService = inject(ImexMetaService);
+  private _matDialog = inject(MatDialog);
+  private _markdownPasteService = inject(MarkdownPasteService);
+  private _taskService = inject(TaskService);
+  private _taskAttachmentService = inject(TaskAttachmentService);
+  private _translateService = inject(TranslateService);
+  private _projectService = inject(ProjectService);
+  private _tagService = inject(TagService);
+  private _destroyRef = inject(DestroyRef);
+  private _noteStartupBannerService = inject(NoteStartupBannerService);
+  private _syncSafetyBannerService = inject(SyncSafetyBannerService);
+  private _superSyncEncryptionMigrationBannerService = inject(
+    SuperSyncEncryptionMigrationBannerService,
+  );
+  private _ngZone = inject(NgZone);
+  private _document = inject(DOCUMENT, { optional: true });
+  private _startupService = inject(StartupService);
+  // Injected for side-effect: creates example tasks on first run
+  private _exampleTasksService = inject(ExampleTasksService);
+  // Injected for side-effect: loads per-instance task widget settings from
+  // localStorage and pushes them to the Electron main process at app boot,
+  // before the user opens the (lazy-loaded) Settings page.
+  private _taskWidgetSettingsService = inject(TaskWidgetSettingsService);
+  private _keyboardLayoutService = inject(KeyboardLayoutService);
+  private _dataInitStateService = inject(DataInitStateService);
+  private _materialIconsLoaderService = inject(MaterialIconsLoaderService);
+  // Injected only to trigger its constructor eagerly at app start, so a
+  // cold-launch add-task/complete-task URL action is never missed.
+  private _appUriTaskActionsService = inject(AppUriTaskActionsService);
+  readonly onboardingHintService = inject(OnboardingHintService);
+
+  private _syncTriggerService = inject(SyncTriggerService);
   readonly workContextService = inject(WorkContextService);
   readonly layoutService = inject(LayoutService);
   readonly globalThemeService = inject(GlobalThemeService);
   readonly _store = inject(Store);
+  private _sectionService = inject(SectionService);
+  private _browserTitleService = inject(BrowserTitleService);
+  private _hasShownLegacyFileBgSnack = false;
+  readonly T = T;
+  readonly TODAY_TAG_ID = TODAY_TAG.id;
+  readonly isShowMobileButtonNav = this.layoutService.isShowMobileBottomNav;
 
-  productivityTipTitle: string = productivityTip && productivityTip[0];
-  productivityTipText: string = productivityTip && productivityTip[1];
+  @ViewChild('routeWrapper', { read: ElementRef }) routeWrapper?: ElementRef<HTMLElement>;
+  @ViewChild(RouterOutlet) private _routerOutlet?: RouterOutlet;
 
-  @HostBinding('@.disabled') isDisableAnimations = false;
+  @HostBinding('class.isWorkViewScrolled') get isWorkViewScrolledClass(): boolean {
+    return this.layoutService.isWorkViewScrolled();
+  }
+
+  @HostBinding('@.disabled') get isDisableAnimations(): boolean {
+    return this._isDisableAnimations();
+  }
+
+  private _isDisableAnimations = computed(() => {
+    const misc = this._globalConfigService.misc();
+    return misc?.isDisableAnimations ?? false;
+  });
+
+  // Experimental: vertical action strip on the right edge instead of the
+  // horizontal top header. Switches the DOM layout live (see template).
+  readonly isVerticalActionBar = computed(
+    () => this._globalConfigService.misc()?.isVerticalActionBar ?? false,
+  );
 
   isRTL: boolean = false;
 
-  isShowUi$: Observable<boolean> = combineLatest([
-    this.syncTriggerService.afterInitialSyncDoneAndDataLoadedInitially$,
-    this.imexMetaService.isDataImportInProgress$,
-  ]).pipe(
-    map(
-      ([afterInitialIsReady, isDataImportInProgress]) =>
-        afterInitialIsReady && !isDataImportInProgress,
-    ),
+  private _isOverlayShownFromStore = toSignal(this._store.select(selectIsOverlayShown), {
+    initialValue: false,
+  });
+
+  // Only show focus overlay if both the store says to show it AND the feature is enabled
+  isShowFocusOverlay = computed(
+    () =>
+      this._isOverlayShownFromStore() &&
+      this._globalConfigService.appFeatures().isFocusModeEnabled,
   );
 
-  isShowFocusOverlay$: Observable<boolean> = this._store.select(
-    selectIsFocusOverlayShown,
+  private readonly _activeWorkContextId = toSignal(
+    this.workContextService.activeWorkContextId$,
+    { initialValue: null },
+  );
+
+  readonly resolvedBgImage = signal<string | null>(null);
+
+  isShowOnboardingPresets = signal(
+    !localStorage.getItem(LS.ONBOARDING_PRESET_DONE) &&
+      !localStorage.getItem(LS.IS_SKIP_TOUR),
   );
 
   private _subs: Subscription = new Subscription();
-  private _intervalTimer?: NodeJS.Timeout;
 
   constructor() {
-    this._languageService.setDefault(LanguageCode.en);
-    this._languageService.setFromBrowserLngIfAutoSwitchLng();
+    this._startupService.init();
+    void this._materialIconsLoaderService.ensureFontReady();
 
-    this._snackService.open({
-      ico: 'lightbulb',
-      config: {
-        duration: 14000,
-      },
-      msg:
-        '<strong>' +
-        (window as any).productivityTips[(window as any).randomIndex][0] +
-        ':</strong> ' +
-        (window as any).productivityTips[(window as any).randomIndex][1],
-    });
+    // Skip onboarding for existing users with data
+    if (this.isShowOnboardingPresets()) {
+      this._dataInitStateService.isAllDataLoadedInitially$
+        .pipe(
+          concatMap(() => this._projectService.list$),
+          first(),
+        )
+        .subscribe((projectList) => {
+          if (projectList.length > 2) {
+            localStorage.setItem(LS.ONBOARDING_PRESET_DONE, 'true');
+            this.isShowOnboardingPresets.set(false);
+          }
+        });
+    }
 
-    this._subs = this._languageService.isLangRTL.subscribe((val) => {
+    // Clear app entrance animation after it completes
+    if (this.isAppEntrance()) {
+      setTimeout(() => {
+        this.isAppEntrance.set(false);
+      }, ENTRANCE_ANIMATION_DURATION);
+    }
+
+    // Use effect to react to language RTL changes
+    effect(() => {
+      const val = this._languageService.isLangRTL();
       this.isRTL = val;
       document.dir = this.isRTL ? 'rtl' : 'ltr';
     });
@@ -156,87 +264,125 @@ export class AppComponent implements OnDestroy {
     this._subs.add(
       this._activatedRoute.queryParams.subscribe((params) => {
         if (!!params.focusItem) {
+          recordSearchNavDebug('appComponent:focusQueryParam', {
+            focusItem: params.focusItem,
+            url: window.location.pathname + window.location.search,
+          });
           this._focusElement(params.focusItem);
         }
-      }),
-    );
-    this._subs.add(
-      this._globalConfigService.misc$.subscribe((misc) => {
-        this.isDisableAnimations = misc.isDisableAnimations;
       }),
     );
 
     // init theme and body class handlers
     this._globalThemeService.init();
 
-    // init offline banner in lack of a better place for it
-    this._initOfflineBanner();
-
-    // basically init
-    this._startTrackingReminderService.init();
-
-    this._requestPersistence();
-    this._checkAvailableStorage();
-
-    if (IS_ANDROID_WEB_VIEW) {
-      this._androidService.init();
-    }
-
-    this._globalConfigService.cfg$.pipe(skip(1), take(1)).subscribe((v) => {
-      if ((v.sync.syncProvider as any) === 'GoogleDrive') {
-        alert(
-          'Please note that synchronization wia google drive is removed in this release. You can use the file sync provider as an alternative and configure syncing in the background yourself',
-        );
+    let bgResolveRequestId = 0;
+    effect(() => {
+      const bgImage = this._globalThemeService.backgroundImg();
+      const currentRequestId = ++bgResolveRequestId;
+      if (
+        typeof bgImage === 'string' &&
+        bgImage.startsWith('file://') &&
+        !this._hasShownLegacyFileBgSnack
+      ) {
+        this._hasShownLegacyFileBgSnack = true;
+        this._snackService.open({
+          msg: T.F.PROJECT.FORM_THEME.S_BACKGROUND_IMAGE_RESELECT_REQUIRED,
+          type: 'WARNING',
+          config: { duration: 0 },
+        });
       }
+      void resolveBgImageToDataUrl(bgImage).then((resolved) => {
+        // Ignore stale resolutions when the source changed mid-read.
+        if (currentRequestId === bgResolveRequestId) {
+          this.resolvedBgImage.set(resolved);
+        }
+      });
     });
 
-    if (IS_ELECTRON) {
-      window.ea.informAboutAppReady();
-      this._initElectronErrorHandler();
-      this._uiHelperService.initElectron();
-
-      window.ea.on(IPC.TRANSFER_SETTINGS_REQUESTED, () => {
-        window.ea.sendAppSettingsToElectron(
-          this._globalConfigService.cfg as GlobalConfigState,
-        );
+    this._syncTriggerService.afterInitialSyncDoneAndDataLoadedInitially$
+      .pipe(take(1))
+      .subscribe(() => {
+        void this._noteStartupBannerService.showLastNoteIfNeeded();
+        this._syncSafetyBannerService.showReminderIfNeeded();
+        void this._superSyncEncryptionMigrationBannerService.showBannerIfNeeded();
       });
+
+    // ! For keyboard shortcuts to work correctly with any layouts (QWERTZ/AZERTY/etc) - user's keyboard layout must be presaved
+    // Connect the service to the utility functions
+    setKeyboardLayoutService(this._keyboardLayoutService);
+    // Defer keyboard layout detection to idle time for better initial load performance,
+    // EXCEPT on macOS Electron where it is needed eagerly for the initial global shortcut registration.
+    if (IS_ELECTRON && IS_MAC) {
+      void this._keyboardLayoutService.saveUserLayout();
+    } else if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => this._keyboardLayoutService.saveUserLayout());
     } else {
-      // WEB VERSION
-      window.addEventListener('beforeunload', (e) => {
-        const gCfg = this._globalConfigService.cfg;
-        if (!gCfg) {
-          throw new Error();
-        }
-        if (gCfg.misc.isConfirmBeforeExit) {
-          e.preventDefault();
-          e.returnValue = '';
-        }
-      });
-
-      if (!IS_ANDROID_WEB_VIEW) {
-        this._chromeExtensionInterfaceService.init();
-        this._initMultiInstanceWarning();
-      }
+      setTimeout(() => this._keyboardLayoutService.saveUserLayout(), 0);
     }
   }
 
-  @HostListener('document:keydown', ['$event']) onKeyDown(ev: KeyboardEvent): void {
-    this._shortcutService.handleKeyDown(ev);
-  }
+  @HostListener('document:paste', ['$event']) onPaste(ev: ClipboardEvent): void {
+    // Skip handling inside input elements
+    const target = ev.target as HTMLElement;
+    if (isInputElement(target)) return;
 
-  // prevent page reloads on missed drops
-  @HostListener('document:dragover', ['$event']) onDragOver(ev: DragEvent): void {
-    ev.preventDefault();
-  }
+    const clipboardData = ev.clipboardData;
+    if (!clipboardData) return;
 
-  @HostListener('document:drop', ['$event']) onDrop(ev: DragEvent): void {
+    const pastedText = clipboardData.getData('text/plain');
+    if (!pastedText) return;
+
+    if (!this._markdownPasteService.isMarkdownTaskList(pastedText)) return;
+
+    // Prevent default paste behavior
     ev.preventDefault();
+
+    // Check if paste is happening on a task element
+    let taskId: string | null = null;
+    let taskTitle: string | null = null;
+    let isSubTask = false;
+
+    // Find the nearest task element via the data-task-id attribute (set
+    // on the <task> host). Avoids brittle id-prefix scans that could match
+    // unrelated elements whose id happens to start with "t-".
+    const taskEl = target.closest<HTMLElement>('[data-task-id]');
+
+    if (taskEl) {
+      taskId = taskEl.getAttribute('data-task-id');
+    }
+
+    if (taskId) {
+      // Get task data to determine if it's a sub-task
+      this._taskService.getByIdOnce$(taskId).subscribe((task) => {
+        if (task) {
+          taskTitle = task.title;
+          isSubTask = !!task.parentId;
+          this._markdownPasteService.handleMarkdownPaste(
+            pastedText,
+            taskId,
+            taskTitle,
+            isSubTask,
+          );
+        } else {
+          // Fallback: handle as parent tasks if task not found
+          this._markdownPasteService.handleMarkdownPaste(pastedText, null);
+        }
+      });
+    } else {
+      // Handle as parent tasks since no specific task context
+      this._markdownPasteService.handleMarkdownPaste(pastedText, null);
+    }
   }
 
   @HostListener('window:beforeinstallprompt', ['$event']) onBeforeInstallPrompt(
-    e: any,
+    e: BeforeInstallPromptEvent,
   ): void {
-    if (IS_ELECTRON || localStorage.getItem(LS.WEB_APP_INSTALL)) {
+    if (
+      IS_ELECTRON ||
+      localStorage.getItem(LS.WEB_APP_INSTALL) ||
+      OnboardingHintService.isOnboardingInProgress()
+    ) {
       return;
     }
 
@@ -270,161 +416,193 @@ export class AppComponent implements OnDestroy {
     return outlet.activatedRouteData.page || 'one';
   }
 
+  /**
+   * The background context menu is scoped to the task-list / work-view routes
+   * (`tag/:id/tasks`, `project/:id/tasks`) so it never opens on unrelated pages
+   * like Habits or Config. See #7734.
+   */
+  isWorkViewPage(): boolean {
+    if (!this._routerOutlet) {
+      return false;
+    }
+    const page = this.getPage(this._routerOutlet);
+    return page === 'tag-tasks' || page === 'project-tasks';
+  }
+
+  getActiveWorkContextId(): string | null {
+    return this._activeWorkContextId() ?? null;
+  }
+
+  onTaskAdded({ taskId }: TaskAddEvent): void {
+    this.layoutService.setPendingFocusTaskId(taskId);
+    this.layoutService.scrollToNewTask(taskId);
+    if (this.onboardingHintService.shouldAutoCloseFirstTaskComposer(taskId)) {
+      this.layoutService.hideAddTaskBar(taskId);
+    }
+  }
+
+  // Opacity + blur follow the resolved background source (per-context image or
+  // the global wallpaper), resolved centrally by GlobalThemeService — on
+  // non-context pages the active context is the sticky "Today" default and must
+  // not style the wallpaper.
+  readonly bgOverlayOpacity = this._globalThemeService.bgOverlayOpacity;
+  readonly bgImageBlur = this._globalThemeService.bgImageBlur;
+
+  readonly bgImageBlurFilter = computed((): string => {
+    const blur = this.bgImageBlur();
+
+    return blur > 0 ? `blur(${blur}px)` : 'none';
+  });
+
+  async openSettings(): Promise<void> {
+    const isForProject =
+      this.workContextService.activeWorkContextType === WorkContextType.PROJECT;
+    const contextId = this.workContextService.activeWorkContextId;
+    if (!contextId) {
+      return;
+    }
+    const entity = isForProject
+      ? await firstValueFrom(this._projectService.getByIdOnce$(contextId))
+      : await firstValueFrom(this._tagService.getTagById$(contextId).pipe(first()));
+    if (!entity) {
+      return;
+    }
+
+    await openWorkContextSettingsDialog(this._matDialog, {
+      isProject: isForProject,
+      entity,
+    });
+  }
+
+  async addSection(): Promise<void> {
+    const ctxId = this.workContextService.activeWorkContextId;
+    const ctxType = this.workContextService.activeWorkContextType;
+    if (!ctxId || !ctxType) return;
+    const title = await firstValueFrom(
+      this._matDialog
+        .open(DialogPromptComponent, { data: { placeholder: T.WW.ADD_SECTION_TITLE } })
+        .afterClosed(),
+    );
+    if (typeof title === 'string' && title.trim()) {
+      this._sectionService.addSection(title, ctxId, ctxType);
+    }
+  }
+
+  isAppEntrance = signal(!this.isShowOnboardingPresets());
+
+  onPresetSelected(): void {
+    this.isAppEntrance.set(true);
+    setTimeout(() => {
+      this.isShowOnboardingPresets.set(false);
+    }, ONBOARDING_PRESET_EXIT_DELAY);
+    setTimeout(() => {
+      this.isAppEntrance.set(false);
+      this.onboardingHintService.startAfterPresetSelection();
+    }, ONBOARDING_ENTRANCE_COMPLETE_DELAY);
+  }
+
+  // Returning user set up sync from onboarding: just reveal the app with their
+  // synced data — no preset applied, no new-user hint tour.
+  onOnboardingDismissed(): void {
+    this.isShowOnboardingPresets.set(false);
+  }
+
+  ngAfterViewInit(): void {
+    this._ngZone.runOutsideAngular(() => {
+      const doc = this._document!;
+      // Handle global document events outside Angular to avoid change detection churn.
+      // - dragover/drop: block the browser's default file-drop navigation.
+      // - keydown: route shortcuts and only re-enter Angular when they matter.
+      // Prevent the browser from treating file drops as navigation events
+      const onDragOver = (ev: DragEvent): void => {
+        ev.preventDefault();
+      };
+
+      // Ensure accidental file drops don’t replace the SPA with the dropped file,
+      // and turn a web link dropped on empty app chrome into a "Check <url>" task.
+      const onDrop = (ev: DragEvent): void => {
+        ev.preventDefault();
+        this._createTaskFromDroppedLink(ev);
+      };
+
+      const onKeyDown = (ev: KeyboardEvent): void => {
+        this._ngZone.run(() => {
+          void this._shortcutService.handleKeyDown(ev);
+        });
+      };
+
+      doc.addEventListener('dragover', onDragOver, { passive: false });
+      doc.addEventListener('drop', onDrop, { passive: false });
+      doc.addEventListener('keydown', onKeyDown);
+
+      this._destroyRef.onDestroy(() => {
+        doc.removeEventListener('dragover', onDragOver);
+        doc.removeEventListener('drop', onDrop);
+        doc.removeEventListener('keydown', onKeyDown);
+      });
+    });
+  }
+
   ngOnDestroy(): void {
     this._subs.unsubscribe();
-    if (this._intervalTimer) clearInterval(this._intervalTimer);
   }
 
-  private _initMultiInstanceWarning(): void {
-    const channel = new BroadcastChannel('superProductivityTab');
-    let isOriginal = true;
-
-    enum Msg {
-      newTabOpened = 'newTabOpened',
-      alreadyOpenElsewhere = 'alreadyOpenElsewhere',
+  // Drops onto tasks/notes/panels stopPropagation in their own handlers, so this
+  // document-level drop only sees links dropped on empty app chrome — mirroring
+  // the Android "share a link" flow by creating a "Check <url>" task.
+  private _createTaskFromDroppedLink(ev: DragEvent): void {
+    if (isInputElement(ev.target as HTMLElement)) {
+      return;
     }
-
-    channel.postMessage(Msg.newTabOpened);
-    // note that listener is added after posting the message
-
-    channel.addEventListener('message', (msg) => {
-      if (msg.data === Msg.newTabOpened && isOriginal) {
-        // message received from 2nd tab
-        // reply to all new tabs that the website is already open
-        channel.postMessage(Msg.alreadyOpenElsewhere);
-      }
-      if (msg.data === Msg.alreadyOpenElsewhere) {
-        isOriginal = false;
-        // message received from original tab
-        // replace this with whatever logic you need
-        // NOTE: translations not ready yet
-        const t =
-          'You are running multiple instances of Super Productivity (possibly over multiple tabs). This is not recommended and might lead to data loss!!';
-        const t2 = 'Please close all other instances, before you continue!';
-        // show in two dialogs to be sure the user didn't miss it
-        alert(t);
-        alert(t2);
-      }
+    const url = getDroppedUrl(ev);
+    if (!url) {
+      return;
+    }
+    // Re-enter Angular: the drop listener runs outside the zone (see above).
+    this._ngZone.run(() => {
+      // Mirror the Android share flow: a readable title plus the raw URL as a
+      // clickable attachment (so the task stays legible and the link opens).
+      const taskId = this._taskService.add(
+        this._translateService.instant(T.APP.DROP_LINK.TASK_TITLE, {
+          url: readableUrl(url),
+        }),
+      );
+      this._taskAttachmentService.addAttachment(taskId, {
+        id: null,
+        type: 'LINK',
+        path: url,
+        title: url,
+        icon: 'link',
+      });
+      this._snackService.open({
+        type: 'SUCCESS',
+        ico: 'add_task',
+        msg: T.APP.DROP_LINK.SNACK,
+      });
     });
-  }
-
-  private _initElectronErrorHandler(): void {
-    window.ea.on(
-      IPC.ERROR,
-      (
-        ev,
-        data: {
-          error: any;
-          stack: any;
-          errorStr: string | unknown;
-        },
-      ) => {
-        const errMsg =
-          typeof data.errorStr === 'string' ? data.errorStr : ' INVALID ERROR MSG :( ';
-
-        this._snackService.open({
-          msg: errMsg,
-          type: 'ERROR',
-        });
-        console.error(data);
-      },
-    );
-  }
-
-  private _initOfflineBanner(): void {
-    isOnline$.subscribe((isOnlineIn) => {
-      if (!isOnlineIn) {
-        this._bannerService.open({
-          id: BannerId.Offline,
-          ico: 'cloud_off',
-          msg: T.APP.B_OFFLINE,
-        });
-      } else {
-        this._bannerService.dismissAll(BannerId.Offline);
-      }
-    });
-  }
-
-  private _requestPersistence(): void {
-    if (navigator.storage) {
-      // try to avoid data-loss
-      Promise.all([navigator.storage.persisted()])
-        .then(([persisted]): any => {
-          if (!persisted) {
-            return navigator.storage.persist().then((granted) => {
-              if (granted) {
-                console.log('Persistent store granted');
-              }
-              // NOTE: we never execute for android web view, because it is always true
-              else if (!IS_ANDROID_WEB_VIEW) {
-                const msg = T.GLOBAL_SNACK.PERSISTENCE_DISALLOWED;
-                console.warn('Persistence not allowed');
-                this._snackService.open({ msg });
-              }
-            });
-          } else {
-            console.log('Persistence already allowed');
-          }
-        })
-        .catch((e) => {
-          console.log(e);
-          const err = e && e.toString ? e.toString() : 'UNKNOWN';
-          const msg = T.GLOBAL_SNACK.PERSISTENCE_ERROR;
-          this._snackService.open({
-            type: 'ERROR',
-            msg,
-            translateParams: {
-              err,
-            },
-          });
-        });
-    }
-  }
-
-  private _checkAvailableStorage(): void {
-    if (environment.production) {
-      if ('storage' in navigator && 'estimate' in navigator.storage) {
-        navigator.storage.estimate().then(({ usage, quota }) => {
-          const u = usage || 0;
-          const q = quota || 0;
-
-          const percentUsed = Math.round((u / q) * 100);
-          const usageInMib = Math.round(u / (1024 * 1024));
-          const quotaInMib = Math.round(q / (1024 * 1024));
-          const details = `${usageInMib} out of ${quotaInMib} MiB used (${percentUsed}%)`;
-          console.log(details);
-          if (quotaInMib - usageInMib <= 333) {
-            alert(
-              `There is only very little disk space available (${
-                quotaInMib - usageInMib
-              }mb). This might affect how the app is running.`,
-            );
-          }
-        });
-      }
-    }
   }
 
   /**
    * since page load and animation time are not always equal
-   * an interval seemed to feel the most responsive
+   * retrying until the rendered task row is available avoids missing focus targets
    */
   private _focusElement(id: string): void {
-    let counter = 0;
-    this._intervalTimer = setInterval(() => {
-      counter += 1;
-
-      const el = document.getElementById(`t-${id}`);
-      el?.focus();
-
+    recordSearchNavDebug('appComponent:focusElement', {
+      taskId: id,
+      url: window.location.pathname + window.location.search,
+    });
+    this.layoutService.focusTaskInViewWhenReady(id, (el) => {
+      recordSearchNavDebug('appComponent:focusElement:success', {
+        taskId: id,
+        url: window.location.pathname + window.location.search,
+        matchedElementId: el.id,
+      });
       if (el && IS_MOBILE) {
-        el.classList.add('mobile-highlight');
-        el.addEventListener('blur', () => el.classList.remove('mobile-highlight'));
+        el.classList.add('mobile-highlight-searched-item');
+        el.addEventListener('blur', () =>
+          el.classList.remove('mobile-highlight-searched-item'),
+        );
       }
-
-      if ((el || counter === 4) && this._intervalTimer) {
-        clearInterval(this._intervalTimer);
-      }
-    }, 400);
+    });
   }
 }

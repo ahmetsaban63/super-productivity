@@ -1,11 +1,16 @@
-@import '../../../../variables';
-@import '../task/task.component.mixins';
+@use '@angular/cdk' as cdk;
+@use '../../../../styles/_globals.scss' as *;
+@use '../task/task.component.mixins' as *;
+
+// Provides the .cdk-visually-hidden helper used for the screen-reader-only
+// "Repeat" prefix on the recurrence line (encapsulation-scoped, not global).
+@include cdk.a11y-visually-hidden();
 
 :host {
   position: relative;
   z-index: 1;
   display: block;
-  padding-bottom: $s;
+  padding-bottom: var(--s);
 
   task-list {
     padding: 0;
@@ -19,69 +24,57 @@ progress-bar {
 }
 
 .wrapper {
-  transition: $transition-standard;
+  transition: var(--transition-standard);
 
-  @media (max-width: $layout-xs) {
-    margin: $s * 0.5;
-    margin-bottom: $s;
+  @include mq(xs, max) {
+    margin: var(--s-half);
+    margin-bottom: var(--s);
   }
 }
 
 .task-title-wrapper {
-  min-height: $bar-height;
+  min-height: var(--bar-height);
   display: flex;
   align-items: center;
-  position: sticky;
-  background: inherit;
-  top: 0;
-  padding: 0 $s;
-  // NOTE make space for close button
-  padding-right: 50px;
-  z-index: 44;
-  border-bottom: 2px solid $c-primary !important;
-  border-top-left-radius: 8px;
-  border-top-right-radius: 8px;
-
-  @include lightTheme() {
-    background: #fff;
-    //border-bottom: 1px solid $c-primary;
-  }
-  @include darkTheme() {
-    background: $dark-theme-bg-slightly-lighter;
-    //border-bottom: 1px solid $c-primary;
-  }
-
-  @include mq(xs) {
-    padding: 0 $s;
-  }
+  z-index: var(--z-right-panel);
+  border-radius: var(--card-border-radius);
+  margin: var(--s);
+  border-bottom: 2px solid var(--c-primary) !important;
 
   ::ng-deep textarea {
-    border: 2px solid red;
     font-weight: 600 !important;
   }
 
   task-title {
-    padding-top: 4px;
-    padding-bottom: 4px;
+    padding-top: var(--s-half);
+    padding-bottom: var(--s-half);
     margin-top: 0;
-    color: $light-theme-text-color;
+    color: var(--text-color);
+  }
 
-    @include darkTheme() {
-      color: $dark-theme-text-color;
-    }
+  .task-detail-more-btn {
+    flex: 0 0 auto;
+    margin-inline-end: var(--s-half);
   }
 }
 
 .task-title.task-title {
   font-weight: bold;
   transform-origin: top center;
-  padding: $s;
-  font-size: 17px;
+  padding: var(--s);
   margin: 0;
   flex-grow: 1;
-  margin-top: 4px;
+  // Keep the title shrinkable next to the trailing overflow button so a long
+  // unbroken title wraps/truncates instead of pushing the button off-row.
+  min-width: 0;
+  margin-top: var(--s-half);
   line-height: 1.4;
   min-height: 40px;
+  font-size: 17px;
+
+  @include mq(xs) {
+    font-size: 15px;
+  }
 
   &:focus {
     transform: scale(1);
@@ -97,19 +90,22 @@ progress-bar {
 
 .created,
 .date-info {
-  padding: $s;
+  padding: var(--s);
   opacity: 0.5;
   text-align: center;
-  color: $light-theme-text-color-muted;
-  @include darkTheme() {
-    color: $dark-theme-text-color-muted;
+  color: var(--text-color-muted);
+}
+
+.edit-date-info {
+  &:hover {
+    cursor: pointer;
   }
 }
 
 .drag-over-msg {
   pointer-events: none;
   position: absolute;
-  top: -$s;
+  top: calc(-1 * var(--s));
   right: 0;
   left: 0;
   bottom: 0;
@@ -119,4 +115,56 @@ progress-bar {
   font-weight: bold;
   display: flex;
   z-index: 2;
+}
+
+.add-btn-wrapper {
+  text-align: center;
+}
+
+.quick-chip {
+  margin-left: var(--s-quarter);
+}
+
+// Merged schedule item: the due date is the primary value, the recurrence a
+// secondary line stacked beneath it (instead of competing side by side).
+.schedule-value {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--s-quarter);
+  min-width: 0;
+}
+
+.schedule-value__date,
+.schedule-value__repeat {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-quarter);
+  max-width: 100%;
+  overflow: hidden;
+
+  mat-icon {
+    flex: 0 0 auto;
+    font-size: 18px;
+    width: 18px;
+    height: 18px;
+  }
+
+  // Let a long recurrence label (e.g. "Monthly on the first Thursday") shrink and
+  // ellipsis within the flex row (nowrap/ellipsis come from .input-item__value span).
+  > span {
+    min-width: 0;
+  }
+}
+
+.schedule-value__repeat {
+  color: var(--text-color-muted);
+}
+
+.attachment-list-panel-content-wrapper {
+  padding-bottom: var(--s);
+}
+
+.local-attachments-heading {
+  margin-bottom: 0;
 }

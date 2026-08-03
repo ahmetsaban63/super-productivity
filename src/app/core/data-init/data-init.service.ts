@@ -1,63 +1,73 @@
-import { Injectable, inject } from '@angular/core';
-import { from, Observable, of } from 'rxjs';
-import { filter, shareReplay, switchMap, take } from 'rxjs/operators';
-import { ProjectService } from '../../features/project/project.service';
-import { WorkContextService } from '../../features/work-context/work-context.service';
+import { inject, Injectable } from '@angular/core';
+import { from, Observable } from 'rxjs';
+import { mapTo, take } from 'rxjs/operators';
 import { Store } from '@ngrx/store';
 import { allDataWasLoaded } from '../../root-store/meta/all-data-was-loaded.actions';
-import { PersistenceService } from '../persistence/persistence.service';
-import { loadAllData } from '../../root-store/meta/load-all-data.action';
-import { isValidAppData } from '../../imex/sync/is-valid-app-data.util';
-import { DataRepairService } from '../data-repair/data-repair.service';
+import { DataInitStateService } from './data-init-state.service';
+import { UserProfileService } from '../../features/user-profile/user-profile.service';
+import { OperationLogHydratorService } from '../../op-log/persistence/operation-log-hydrator.service';
+import { OpLog } from '../log';
 
 @Injectable({ providedIn: 'root' })
 export class DataInitService {
-  private _persistenceService = inject(PersistenceService);
-  private _projectService = inject(ProjectService);
-  private _workContextService = inject(WorkContextService);
   private _store$ = inject<Store<any>>(Store);
-  private _dataRepairService = inject(DataRepairService);
+  private _dataInitStateService = inject(DataInitStateService);
+  private _userProfileService = inject(UserProfileService);
+  private _operationLogHydratorService = inject(OperationLogHydratorService);
 
-  isAllDataLoadedInitially$: Observable<boolean> = from(this.reInit()).pipe(
-    switchMap(() => this._workContextService.isActiveWorkContextProject$),
-    switchMap((isProject) =>
-      isProject
-        ? // NOTE: this probably won't work some of the time
-          this._projectService.isRelatedDataLoadedForCurrentProject$
-        : of(true),
-    ),
-    filter((isLoaded) => isLoaded),
-    take(1),
-    // only ever load once
-    shareReplay(1),
+  private _isAllDataLoadedInitially$: Observable<boolean> = from(this.reInit()).pipe(
+    mapTo(true),
   );
 
   constructor() {
     // TODO better construction than this
-    this.isAllDataLoadedInitially$.pipe(take(1)).subscribe(() => {
-      // here because to avoid circular dependencies
-      this._store$.dispatch(allDataWasLoaded());
+    this._isAllDataLoadedInitially$.pipe(take(1)).subscribe({
+      next: (v) => {
+        // here because to avoid circular dependencies
+        this._store$.dispatch(allDataWasLoaded());
+        this._dataInitStateService._neverUpdateOutsideDataInitService$.next(v);
+      },
+      error: (err) => {
+        // Snack notification is already shown by OperationLogHydratorService
+        OpLog.err('DataInitService: Failed to initialize app data', err);
+      },
     });
   }
 
   // NOTE: it's important to remember that this doesn't mean that no changes are occurring any more
   // because the data load is triggered, but not necessarily already reflected inside the store
-  async reInit(isOmitTokens: boolean = false): Promise<void> {
-    const appDataComplete = await this._persistenceService.loadComplete(true);
-    const isValid = isValidAppData(appDataComplete);
-    if (isValid) {
-      this._store$.dispatch(loadAllData({ appDataComplete, isOmitTokens }));
-    } else {
-      if (this._dataRepairService.isRepairPossibleAndConfirmed(appDataComplete)) {
-        const fixedData = this._dataRepairService.repairData(appDataComplete);
-        this._store$.dispatch(
-          loadAllData({
-            appDataComplete: fixedData,
-            isOmitTokens,
-          }),
-        );
-        await this._persistenceService.importComplete(fixedData);
-      }
+  async reInit(): Promise<void> {
+    // localStorage check
+    // This check happens before ANY profile initialization code runs
+    const isProfilesEnabled =
+      typeof localStorage !== 'undefined' &&
+      localStorage.getItem('sp_user_profiles_enabled') === 'true';
+
+    if (isProfilesEnabled) {
+      // Only initialize profile system if explicitly enabled
+      await this._userProfileService.initialize();
     }
+
+    // Hydrate from Operation Log (which handles migration from legacy if needed)
+    await this._operationLogHydratorService.hydrateStore();
+  }
+
+  /**
+   * Re-initialize the app after a remote sync download.
+   * This uses hydrateFromRemoteSync() which:
+   * 1. Uses the downloaded mainModelData (passed from sync service)
+   * 2. Persists it to SUP_OPS as a SYNC_IMPORT operation
+   * 3. Creates a snapshot for crash safety
+   * 4. Updates NgRx with the synced data
+   *
+   * @param downloadedMainModelData - The main model data from the remote meta file.
+   *   Entity models are not stored in IndexedDB, so this must be passed explicitly.
+   */
+  async reInitFromRemoteSync(
+    downloadedMainModelData?: Record<string, unknown>,
+  ): Promise<void> {
+    await this._operationLogHydratorService.hydrateFromRemoteSync(
+      downloadedMainModelData,
+    );
   }
 }

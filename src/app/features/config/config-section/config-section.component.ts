@@ -2,8 +2,6 @@ import {
   ChangeDetectionStrategy,
   ChangeDetectorRef,
   Component,
-  ComponentFactory,
-  ComponentFactoryResolver,
   inject,
   Input,
   OnDestroy,
@@ -15,8 +13,9 @@ import {
 import { expandAnimation } from '../../../ui/animations/expand.ani';
 import {
   ConfigFormSection,
+  ConfigSectionAction,
   CustomCfgSection,
-  GlobalConfigSectionKey,
+  GlobalConfigFormSectionKey,
 } from '../global-config.model';
 import { ProjectCfgFormKey } from '../../project/project.model';
 import { Subscription } from 'rxjs';
@@ -28,6 +27,15 @@ import { exists } from '../../../util/exists';
 import { CollapsibleComponent } from '../../../ui/collapsible/collapsible.component';
 import { HelpSectionComponent } from '../../../ui/help-section/help-section.component';
 import { ConfigFormComponent } from '../config-form/config-form.component';
+import { MatButton } from '@angular/material/button';
+import { MatIcon } from '@angular/material/icon';
+import { Log } from '../../../core/log';
+
+interface CustomFormInstance {
+  cfg?: Record<string, unknown>;
+  section?: ConfigFormSection<Record<string, unknown>>;
+  save?: { subscribe: (fn: (v: Record<string, unknown>) => void) => void };
+}
 
 @Component({
   selector: 'config-section',
@@ -40,40 +48,42 @@ import { ConfigFormComponent } from '../config-form/config-form.component';
     HelpSectionComponent,
     ConfigFormComponent,
     TranslatePipe,
+    MatButton,
+    MatIcon,
   ],
 })
 export class ConfigSectionComponent implements OnInit, OnDestroy {
   private _cd = inject(ChangeDetectorRef);
-  private _componentFactoryResolver = inject(ComponentFactoryResolver);
   private _workContextService = inject(WorkContextService);
   private _translateService = inject(TranslateService);
 
   // TODO: Skipped for migration because:
   //  This input is used in a control flow expression (e.g. `@if` or `*ngIf`)
   //  and migrating would break narrowing currently.
-  @Input() section?: ConfigFormSection<{ [key: string]: any }>;
+  @Input() section?: ConfigFormSection<Record<string, unknown>>;
+  @Input() isExpanded: boolean = false;
   readonly save = output<{
-    sectionKey: GlobalConfigSectionKey | ProjectCfgFormKey | TagCfgFormKey;
-    config: any;
+    sectionKey: GlobalConfigFormSectionKey | ProjectCfgFormKey | TagCfgFormKey;
+    config: Record<string, unknown>;
   }>();
   readonly customFormRef = viewChild('customForm', { read: ViewContainerRef });
-  isExpanded: boolean = false;
   private _subs: Subscription = new Subscription();
-  private _instance?: Component;
+  private _instance?: CustomFormInstance;
   private _viewDestroyTimeout?: number;
+  private _pendingActions = new Set<ConfigSectionAction>();
 
-  private _cfg: any;
+  private _cfg: Record<string, unknown> | undefined;
 
-  get cfg(): any | undefined {
+  get cfg(): Record<string, unknown> | undefined {
     return this._cfg;
   }
 
   // TODO: Skipped for migration because:
   //  Accessor inputs cannot be migrated as they are too complex.
-  @Input() set cfg(v: any) {
+  @Input() set cfg(v: Record<string, unknown> | undefined) {
     this._cfg = v;
     if (v && this._instance) {
-      (this._instance as any).cfg = { ...v };
+      this._instance.cfg = { ...v };
     }
   }
 
@@ -104,7 +114,9 @@ export class ConfigSectionComponent implements OnInit, OnDestroy {
           customFormRef.clear();
           // dirty trick to make sure data is actually there
           this._viewDestroyTimeout = window.setTimeout(() => {
-            this._loadCustomSection((this.section as any).customSection);
+            this._loadCustomSection(
+              (this.section as ConfigFormSection<Record<string, unknown>>).customSection!,
+            );
             this._cd.detectChanges();
           });
         }
@@ -120,14 +132,41 @@ export class ConfigSectionComponent implements OnInit, OnDestroy {
   }
 
   onSave($event: {
-    sectionKey: GlobalConfigSectionKey | ProjectCfgFormKey | TagCfgFormKey;
-    config: any;
+    sectionKey: GlobalConfigFormSectionKey | ProjectCfgFormKey | TagCfgFormKey;
+    config: Record<string, unknown>;
   }): void {
-    this.isExpanded = false;
     this.save.emit($event);
   }
 
-  trackByIndex(i: number, p: any): number {
+  isActionPending(action: ConfigSectionAction): boolean {
+    return this._pendingActions.has(action);
+  }
+
+  onAction(action: ConfigSectionAction): void {
+    if (this.isActionPending(action)) {
+      return;
+    }
+
+    try {
+      const result = action.onClick();
+      if (result instanceof Promise) {
+        this._pendingActions.add(action);
+        this._cd.markForCheck();
+        result
+          .catch((err) => {
+            Log.err('ConfigSection action error', err);
+          })
+          .finally(() => {
+            this._pendingActions.delete(action);
+            this._cd.markForCheck();
+          });
+      }
+    } catch (err) {
+      Log.err('ConfigSection action error', err);
+    }
+  }
+
+  trackByIndex(i: number, p: unknown): number {
     return i;
   }
 
@@ -135,25 +174,32 @@ export class ConfigSectionComponent implements OnInit, OnDestroy {
     const componentToRender = customConfigFormSectionComponent(customSection);
 
     if (componentToRender) {
-      const factory: ComponentFactory<any> =
-        this._componentFactoryResolver.resolveComponentFactory(componentToRender as any);
-      const ref = exists<any>(this.customFormRef()).createComponent(factory);
+      const ref = exists<ViewContainerRef>(this.customFormRef()).createComponent(
+        componentToRender,
+      );
+
+      const instance = ref.instance as CustomFormInstance;
 
       // NOTE: important that this is set only if we actually have a value
       // otherwise the default fallback will be overwritten
       if (this.cfg) {
-        ref.instance.cfg = this.cfg;
+        instance.cfg = this.cfg;
       }
 
-      ref.instance.section = this.section;
+      instance.section = this.section;
 
-      if (ref.instance.save) {
-        ref.instance.save.subscribe((v: any) => {
-          this.onSave(v);
+      if (instance.save) {
+        instance.save.subscribe((v: Record<string, unknown>) => {
+          this.onSave(
+            v as {
+              sectionKey: GlobalConfigFormSectionKey | ProjectCfgFormKey | TagCfgFormKey;
+              config: Record<string, unknown>;
+            },
+          );
           this._cd.detectChanges();
         });
       }
-      this._instance = ref.instance;
+      this._instance = instance;
     }
   }
 }

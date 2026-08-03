@@ -8,11 +8,8 @@ import {
   OnInit,
   output,
 } from '@angular/core';
-import { combineLatest, Subscription } from 'rxjs';
-import { getWorklogStr } from '../../../util/get-work-log-str';
-import 'moment-duration-format';
-// @ts-ignore
-import Clipboard from 'clipboard';
+import { combineLatest, from, Subscription } from 'rxjs';
+import { getDbDateStr } from '../../../util/get-db-date-str';
 import { SnackService } from '../../../core/snack/snack.service';
 import { WorklogService } from '../worklog.service';
 import {
@@ -21,7 +18,7 @@ import {
   WorklogGrouping,
 } from '../worklog.model';
 import { T } from '../../../t.const';
-import { distinctUntilChanged } from 'rxjs/operators';
+import { distinctUntilChanged, switchMap } from 'rxjs/operators';
 import { distinctUntilChangedObject } from '../../../util/distinct-until-changed-object';
 import { WorkContextAdvancedCfg } from '../../work-context/work-context.model';
 import { WORKLOG_EXPORT_DEFAULTS } from '../../work-context/work-context.const';
@@ -44,6 +41,7 @@ import { MatFormField } from '@angular/material/form-field';
 import { MatInput } from '@angular/material/input';
 import { SimpleDownloadDirective } from '../../../ui/simple-download/simple-download.directive';
 import { TranslatePipe } from '@ngx-translate/core';
+import { TimeTrackingService } from '../../time-tracking/time-tracking.service';
 
 @Component({
   selector: 'worklog-export',
@@ -80,10 +78,10 @@ export class WorklogExportComponent implements OnInit, OnDestroy {
   private _changeDetectorRef = inject(ChangeDetectorRef);
   private _projectService = inject(ProjectService);
   private _tagService = inject(TagService);
+  private _timeTrackingService = inject(TimeTrackingService);
 
   readonly rangeStart = input<Date>();
   readonly rangeEnd = input<Date>();
-  readonly isWorklogExport = input<boolean>();
   readonly isShowClose = input<boolean>();
   readonly projectId = input<string | null>();
 
@@ -142,7 +140,7 @@ export class WorklogExportComponent implements OnInit, OnDestroy {
       throw new Error('Worklog: Invalid date range');
     }
     this.fileName =
-      'tasks' + getWorklogStr(rangeStart) + '-' + getWorklogStr(rangeEnd) + '.csv';
+      'tasks' + getDbDateStr(rangeStart) + '-' + getDbDateStr(rangeEnd) + '.csv';
 
     this._subs.add(
       this._workContextService.advancedCfg$
@@ -177,14 +175,21 @@ export class WorklogExportComponent implements OnInit, OnDestroy {
           true,
           this.projectId(),
         ),
-        this._workContextService.activeWorkContext$,
         this._projectService.list$,
         this._tagService.tags$,
+        this._workContextService.activeWorkContext$.pipe(
+          switchMap((ac) =>
+            from(this._timeTrackingService.getLegacyWorkStartEndForWorkContext(ac)),
+          ),
+        ),
       ])
         .pipe()
-        .subscribe(([tasks, ac, projects, tags]) => {
+        .subscribe(([tasks, projects, tags, activeContextTimeTracking]) => {
           if (tasks) {
-            const workTimes = { start: ac.workStart, end: ac.workEnd };
+            const workTimes = {
+              start: activeContextTimeTracking.workStart,
+              end: activeContextTimeTracking.workEnd,
+            };
             const data = { tasks, projects, tags, workTimes };
             const rows = createRows(data, this.options.groupBy);
             this.formattedRows = formatRows(rows, this.options);
@@ -226,16 +231,6 @@ export class WorklogExportComponent implements OnInit, OnDestroy {
           }
         }),
     );
-
-    // dirty but good enough for now
-    const clipboard = new Clipboard('#clipboard-btn');
-    clipboard.on('success', (e: any) => {
-      this._snackService.open({
-        msg: T.GLOBAL_SNACK.COPY_TO_CLIPPBOARD,
-        type: 'SUCCESS',
-      });
-      e.clearSelection();
-    });
   }
 
   ngOnDestroy(): void {
@@ -253,5 +248,21 @@ export class WorklogExportComponent implements OnInit, OnDestroy {
 
   addCol(colOpt: WorklogColTypes): void {
     this.options.cols.push(colOpt);
+  }
+
+  async copyToClipboard(): Promise<void> {
+    try {
+      await navigator.clipboard.writeText(this.txt);
+      this._snackService.open({
+        msg: T.GLOBAL_SNACK.COPY_TO_CLIPPBOARD,
+        type: 'SUCCESS',
+      });
+    } catch (err) {
+      this._snackService.open({
+        msg: 'Failed to copy to clipboard',
+        type: 'ERROR',
+        isSkipTranslate: true,
+      });
+    }
   }
 }

@@ -1,5 +1,4 @@
 import { EntityState } from '@ngrx/entity';
-import { MODEL_VERSION_KEY } from '../../app.constants';
 
 export enum SimpleCounterType {
   StopWatch = 'StopWatch',
@@ -13,11 +12,15 @@ export interface SimpleCounterCfgFields {
   // basic cfg
   title: string;
   isEnabled: boolean;
+  isHideButton?: boolean;
   icon: string | null;
   type: SimpleCounterType;
-  isTrackStreaks: boolean;
-  streakMinValue: number;
-  streakWeekDays: { [key: number]: boolean };
+  isTrackStreaks?: boolean;
+  // can be undefined due to how form works :(
+  streakMinValue?: number;
+  streakMode?: 'specific-days' | 'weekly-frequency';
+  streakWeekDays?: { [key: number]: boolean };
+  streakWeeklyFrequency?: number;
 
   // adv cfg
   // repeated countdown reminder
@@ -32,14 +35,10 @@ export interface SimpleCounterCopy extends SimpleCounterCfgFields {
 
 export type SimpleCounter = Readonly<SimpleCounterCopy>;
 
-// just an empty dummy actually
-// todo remove
 export type SimpleCounterConfig = Readonly<{
   counters: SimpleCounter[];
 }>;
 
 export interface SimpleCounterState extends EntityState<SimpleCounter> {
   ids: string[];
-  // additional entities state properties
-  [MODEL_VERSION_KEY]?: number;
 }

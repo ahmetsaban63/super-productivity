@@ -2,10 +2,8 @@ import { createFeature, createReducer, on } from '@ngrx/store';
 import { IssueProvider, IssueProviderState } from '../issue.model';
 import { IssueProviderActions } from './issue-provider.actions';
 import { createEntityAdapter, EntityAdapter } from '@ngrx/entity';
-import { MODEL_VERSION_KEY } from '../../../app.constants';
 import { loadAllData } from '../../../root-store/meta/load-all-data.action';
-import { migrateIssueProviderState } from '../migrate-issue-providers';
-import { deleteProject } from '../../project/store/project.actions';
+import { TaskSharedActions } from '../../../root-store/meta/task-shared.actions';
 
 export const ISSUE_PROVIDER_FEATURE_KEY = 'issueProvider';
 
@@ -13,7 +11,6 @@ export const adapter: EntityAdapter<IssueProvider> = createEntityAdapter<IssuePr
 
 export const issueProviderInitialState: IssueProviderState = adapter.getInitialState({
   ids: [] as string[],
-  [MODEL_VERSION_KEY]: 0,
   // additional entity state properties
 });
 
@@ -22,19 +19,181 @@ export const issueProviderReducer = createReducer(
 
   // META ACTIONS
   // ------------
-  on(loadAllData, (oldState, { appDataComplete }) =>
-    appDataComplete.issueProvider
-      ? migrateIssueProviderState({ ...appDataComplete.issueProvider })
-      : oldState,
-  ),
-  on(deleteProject, (state, { project }) =>
+  on(loadAllData, (oldState, { appDataComplete }) => {
+    if (!appDataComplete.issueProvider) {
+      return oldState;
+    }
+    const state = appDataComplete.issueProvider;
+    // Migrate pre-plugin GITHUB providers to plugin shape
+    const migratedEntities: Record<string, IssueProvider> = {};
+    let needsMigration = false;
+    for (const id of state.ids) {
+      const provider = state.entities[id] as unknown as
+        | Record<string, unknown>
+        | undefined;
+      if (
+        provider &&
+        provider['issueProviderKey'] === 'GITHUB' &&
+        !provider['pluginConfig']
+      ) {
+        needsMigration = true;
+        // TODO: Remove legacy field preservation after a few releases (added v17.3).
+        // Spread original provider so legacy fields (repo, token, etc.) survive
+        // for older clients that haven't upgraded yet.
+        migratedEntities[id] = {
+          ...provider,
+          pluginId: 'github-issue-provider',
+          pluginConfig: {
+            repo: provider['repo'] ?? '',
+            token: provider['token'] ?? '',
+            filterUsername: provider['filterUsernameForIssueUpdates'] ?? '',
+            backlogQuery: provider['backlogQuery'] ?? '',
+            twoWaySync: provider['twoWaySync'] ?? {},
+            isAutoCreateIssues: provider['isAutoCreateIssues'] ?? false,
+          },
+        } as unknown as IssueProvider;
+      }
+
+      // Migrate pre-plugin CLICKUP providers to plugin shape
+      if (
+        provider &&
+        provider['issueProviderKey'] === 'CLICKUP' &&
+        !provider['pluginConfig']
+      ) {
+        needsMigration = true;
+        const teamIds = provider['teamIds'] as string[] | undefined;
+        // TODO: Remove legacy field preservation after a few releases.
+        // Spread original provider so legacy fields (apiKey, teamIds, etc.) survive
+        // for older clients that haven't upgraded yet.
+        migratedEntities[id] = {
+          ...provider,
+          pluginId: 'clickup-issue-provider',
+          pluginConfig: {
+            apiKey: provider['apiKey'] ?? '',
+            teamIds: teamIds?.length ? teamIds.join(',') : '',
+            userId: provider['userId'] != null ? String(provider['userId']) : '',
+          },
+        } as unknown as IssueProvider;
+      }
+
+      // Migrate pre-plugin GITEA providers to plugin shape
+      if (
+        provider &&
+        provider['issueProviderKey'] === 'GITEA' &&
+        !provider['pluginConfig']
+      ) {
+        needsMigration = true;
+        // TODO: Remove legacy field preservation after a few releases.
+        // Spread original provider so legacy fields (host, token, etc.) survive
+        // for older clients that haven't upgraded yet.
+        migratedEntities[id] = {
+          ...provider,
+          pluginId: 'gitea-issue-provider',
+          pluginConfig: {
+            host: provider['host'] ?? '',
+            token: provider['token'] ?? '',
+            repoFullname: provider['repoFullname'] ?? '',
+            scope: provider['scope'] ?? 'created-by-me',
+            filterLabels: provider['filterLabels'] ?? '',
+            excludeLabels: provider['excludeLabels'] ?? '',
+          },
+        } as unknown as IssueProvider;
+      }
+
+      // Migrate pre-plugin LINEAR providers to plugin shape
+      if (
+        provider &&
+        provider['issueProviderKey'] === 'LINEAR' &&
+        !provider['pluginConfig']
+      ) {
+        needsMigration = true;
+        // TODO: Remove legacy field preservation after a few releases.
+        // Spread original provider so legacy fields (apiKey, teamId, etc.) survive
+        // for older clients that haven't upgraded yet.
+        migratedEntities[id] = {
+          ...provider,
+          pluginId: 'linear-issue-provider',
+          pluginConfig: {
+            apiKey: provider['apiKey'] ?? '',
+            teamId: provider['teamId'] ?? '',
+            projectId: provider['projectId'] ?? '',
+          },
+        } as unknown as IssueProvider;
+      }
+
+      // Migrate pre-plugin TRELLO providers to plugin shape
+      if (
+        provider &&
+        provider['issueProviderKey'] === 'TRELLO' &&
+        !provider['pluginConfig']
+      ) {
+        needsMigration = true;
+        // TODO: Remove legacy field preservation after a few releases.
+        // Spread original provider so legacy fields (apiKey, token, boardId, etc.)
+        // survive for older clients that haven't upgraded yet. boardName is listed
+        // first so the provider tooltip/initials (which show the first non-secret
+        // config string) keep displaying the board name.
+        migratedEntities[id] = {
+          ...provider,
+          pluginId: 'trello-issue-provider',
+          pluginConfig: {
+            boardName: provider['boardName'] ?? '',
+            apiKey: provider['apiKey'] ?? '',
+            token: provider['token'] ?? '',
+            boardId: provider['boardId'] ?? '',
+            filterUsername: provider['filterUsername'] ?? '',
+          },
+        } as unknown as IssueProvider;
+      }
+
+      // Migrate pre-plugin AZURE_DEVOPS providers to plugin shape
+      if (
+        provider &&
+        provider['issueProviderKey'] === 'AZURE_DEVOPS' &&
+        !provider['pluginConfig']
+      ) {
+        needsMigration = true;
+        // TODO: Remove legacy field preservation after a few releases.
+        // Spread original provider so legacy fields (host, token, project, etc.)
+        // survive for older clients that haven't upgraded yet. project is listed
+        // first so the provider tooltip/initials (which show the first non-secret
+        // config string) keep displaying the project name.
+        migratedEntities[id] = {
+          ...provider,
+          pluginId: 'azure-devops-issue-provider',
+          pluginConfig: {
+            project: provider['project'] ?? '',
+            host: provider['host'] ?? '',
+            token: provider['token'] ?? '',
+            organization: provider['organization'] ?? '',
+            scope: provider['scope'] ?? 'assigned-to-me',
+            autoImportLimit: provider['autoImportLimit'] ?? 50,
+          },
+        } as unknown as IssueProvider;
+      }
+    }
+    if (!needsMigration) {
+      return state;
+    }
+    return {
+      ...state,
+      entities: { ...state.entities, ...migratedEntities },
+    };
+  }),
+  on(TaskSharedActions.deleteProject, (state, { projectId }) =>
     adapter.updateMany(
       state.ids
         .map((id) => state.entities[id])
-        .filter((ip) => ip?.defaultProjectId === project.id)
+        .filter((ip) => ip?.defaultProjectId === projectId)
         .map((ip) => ({ id: ip!.id, changes: { defaultProjectId: null } })),
       state,
     ),
+  ),
+  on(TaskSharedActions.deleteIssueProvider, (state, { issueProviderId }) =>
+    adapter.removeOne(issueProviderId, state),
+  ),
+  on(TaskSharedActions.deleteIssueProviders, (state, { ids }) =>
+    adapter.removeMany(ids, state),
   ),
   // -----------
 
@@ -55,12 +214,6 @@ export const issueProviderReducer = createReducer(
   ),
   on(IssueProviderActions.updateIssueProviders, (state, action) =>
     adapter.updateMany(action.issueProviders, state),
-  ),
-  on(IssueProviderActions.deleteIssueProvider, (state, action) =>
-    adapter.removeOne(action.id, state),
-  ),
-  on(IssueProviderActions.deleteIssueProviders, (state, action) =>
-    adapter.removeMany(action.ids, state),
   ),
   on(IssueProviderActions.loadIssueProviders, (state, action) =>
     adapter.setAll(action.issueProviders, state),

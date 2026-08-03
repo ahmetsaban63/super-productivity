@@ -10,11 +10,11 @@ import {
 import { FieldType } from '@ngx-formly/core';
 import { Subscription } from 'rxjs';
 import { TranslateService } from '@ngx-translate/core';
+import { Log } from '../../core/log';
 
 @Component({
   selector: 'formly-translated-template',
   templateUrl: './formly-translated-template.component.html',
-  styleUrls: ['./formly-translated-template.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class FormlyTranslatedTemplateComponent
@@ -36,7 +36,7 @@ export class FormlyTranslatedTemplateComponent
 
     const translationId = this.field.templateOptions.text;
     if (!translationId) {
-      console.warn('No translation id provided');
+      Log.err('No translation id provided');
       return;
     }
 
@@ -63,7 +63,10 @@ export class FormlyTranslatedTemplateComponent
       this._el = document.createElement(tag);
 
       if (this.field.templateOptions.class) {
-        (this._el as HTMLElement).classList.add(this.field.templateOptions.class);
+        // Use `className` so single tokens AND space-separated lists work;
+        // `classList.add(str)` would reject a multi-token string. Safe here
+        // because `_el` was freshly created above and has no prior classes.
+        (this._el as HTMLElement).className = String(this.field.templateOptions.class);
       }
 
       tplWrapper.nativeElement.append(this._el);

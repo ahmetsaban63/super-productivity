@@ -1,8 +1,9 @@
 @if (activeBanner$ | async; as banner) {
   <div
     [@banner]
-    [class.isError]="banner.type === 'ERROR'"
     class="content-wrapper"
+    role="status"
+    aria-live="polite"
   >
     @if (banner.progress$ && (banner.progress$ | async); as progress) {
       @if (progress > 0) {
@@ -15,7 +16,10 @@
     <div class="inner-content-wrapper">
       @if (banner.img) {
         <div class="motivational-img-wrapper">
-          <img [src]="banner.img" />
+          <img
+            [src]="banner.img"
+            alt=""
+          />
         </div>
       }
       <div class="message-wrapper">
@@ -28,7 +32,10 @@
         <!-- -->
         @if (banner.timer$) {
           <div class="message">
-            <strong>{{ banner.timer$ | async | msToMinuteClockString }}</strong> –
+            <strong aria-hidden="true">{{
+              banner.timer$ | async | msToMinuteClockString
+            }}</strong>
+            –
             {{ banner.msg | translate: banner.translateParams }}
           </div>
         } @else {
@@ -50,34 +57,70 @@
           </button>
         }
         @if (banner.action) {
-          <button
-            (click)="action(banner.id, banner.action)"
-            color="primary"
-            mat-button
-            tabindex="1"
-          >
-            {{ banner.action.label | translate: banner.translateParams }}
-          </button>
+          @if (banner.action.icon) {
+            <button
+              (click)="action(banner, banner.action)"
+              [attr.aria-label]="banner.action.label | translate: banner.translateParams"
+              [title]="banner.action.label | translate: banner.translateParams"
+              mat-icon-button
+              tabindex="1"
+            >
+              <mat-icon>{{ banner.action.icon }}</mat-icon>
+            </button>
+          } @else {
+            <button
+              (click)="action(banner, banner.action)"
+              color="primary"
+              mat-button
+              tabindex="1"
+            >
+              {{ banner.action.label | translate: banner.translateParams }}
+            </button>
+          }
         }
         @if (banner.action2) {
-          <button
-            (click)="action(banner.id, banner.action2)"
-            color="primary"
-            mat-button
-            tabindex="1"
-          >
-            {{ banner.action2.label | translate: banner.translateParams }}
-          </button>
+          @if (banner.action2.icon) {
+            <button
+              (click)="action(banner, banner.action2)"
+              [attr.aria-label]="banner.action2.label | translate: banner.translateParams"
+              [title]="banner.action2.label | translate: banner.translateParams"
+              mat-icon-button
+              tabindex="1"
+            >
+              <mat-icon>{{ banner.action2.icon }}</mat-icon>
+            </button>
+          } @else {
+            <button
+              (click)="action(banner, banner.action2)"
+              color="primary"
+              mat-button
+              tabindex="1"
+            >
+              {{ banner.action2.label | translate: banner.translateParams }}
+            </button>
+          }
         }
         @if (banner.action3) {
-          <button
-            (click)="action(banner.id, banner.action3)"
-            color="primary"
-            mat-button
-            tabindex="1"
-          >
-            {{ banner.action3.label | translate: banner.translateParams }}
-          </button>
+          @if (banner.action3.icon) {
+            <button
+              (click)="action(banner, banner.action3)"
+              [attr.aria-label]="banner.action3.label | translate: banner.translateParams"
+              [title]="banner.action3.label | translate: banner.translateParams"
+              mat-icon-button
+              tabindex="1"
+            >
+              <mat-icon>{{ banner.action3.icon }}</mat-icon>
+            </button>
+          } @else {
+            <button
+              (click)="action(banner, banner.action3)"
+              color="primary"
+              mat-button
+              tabindex="1"
+            >
+              {{ banner.action3.label | translate: banner.translateParams }}
+            </button>
+          }
         }
       </div>
     </div>

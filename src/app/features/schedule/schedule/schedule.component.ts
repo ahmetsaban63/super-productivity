@@ -1,554 +1,445 @@
+/* eslint-disable */
 import {
-  AfterViewInit,
   ChangeDetectionStrategy,
   Component,
-  DestroyRef,
-  ElementRef,
+  computed,
+  effect,
   inject,
-  LOCALE_ID,
-  OnDestroy,
-  viewChild,
+  signal,
 } from '@angular/core';
-import { BehaviorSubject, combineLatest, fromEvent, Observable } from 'rxjs';
+import { fromEvent } from 'rxjs';
 import { select, Store } from '@ngrx/store';
-import { selectTimelineTasks } from '../../work-context/store/work-context.selectors';
-import { selectTaskRepeatCfgsWithAndWithoutStartTime } from '../../task-repeat-cfg/store/task-repeat-cfg.reducer';
-import { selectPlannerDayMap } from '../../planner/store/planner.selectors';
+import { selectCalendarProviders } from '../../issue/store/issue-provider.selectors';
+import { HiddenCalendarProvidersService } from '../../calendar-integration/hidden-calendar-providers.service';
+import { getIssueProviderTooltip } from '../../issue/mapping-helper/get-issue-provider-tooltip';
+import { IssueProvider } from '../../issue/issue.model';
 import {
-  debounceTime,
-  delay,
-  first,
-  map,
-  startWith,
-  switchMap,
-  tap,
-} from 'rxjs/operators';
-import { getTomorrow } from '../../../util/get-tomorrow';
+  MatMenu,
+  MatMenuContent,
+  MatMenuItem,
+  MatMenuTrigger,
+} from '@angular/material/menu';
+import { debounceTime, map, startWith } from 'rxjs/operators';
+import { safeFormatDate } from '../../../util/safe-format-date';
 import { TaskService } from '../../tasks/task.service';
 import { LayoutService } from '../../../core-ui/layout/layout.service';
-import { MatDialog } from '@angular/material/dialog';
-import { CalendarIntegrationService } from '../../calendar-integration/calendar-integration.service';
-import { DateService } from '../../../core/date/date.service';
-import { LS } from '../../../core/persistence/storage-keys.const';
-import { DialogTimelineSetupComponent } from '../dialog-timeline-setup/dialog-timeline-setup.component';
-import { T } from 'src/app/t.const';
-import { AsyncPipe, DatePipe } from '@angular/common';
-import { ScheduleEventComponent } from '../schedule-event/schedule-event.component';
-import { ScheduleDay, ScheduleEvent } from '../schedule.model';
-import {
-  CdkDrag,
-  CdkDragMove,
-  CdkDragRelease,
-  CdkDragStart,
-} from '@angular/cdk/drag-drop';
-import { GlobalTrackingIntervalService } from '../../../core/global-tracking-interval/global-tracking-interval.service';
-import { IS_TOUCH_PRIMARY } from 'src/app/util/is-mouse-primary';
-import {
-  selectTimelineConfig,
-  selectTimelineWorkStartEndHours,
-} from '../../config/store/global-config.reducer';
-import { PlannerActions } from '../../planner/store/planner.actions';
-import { FH, SVEType, T_ID_PREFIX } from '../schedule.const';
-import { mapToScheduleDays } from '../map-schedule-data/map-to-schedule-days';
-import { mapScheduleDaysToScheduleEvents } from '../map-schedule-data/map-schedule-days-to-schedule-events';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
-import { throttle } from 'helpful-decorators';
-import { CreateTaskPlaceholderComponent } from '../create-task-placeholder/create-task-placeholder.component';
-import { ShortcutService } from '../../../core-ui/shortcut/shortcut.service';
-import { DRAG_DELAY_FOR_TOUCH } from '../../../app.constants';
+import { MatIconButton } from '@angular/material/button';
 import { MatIcon } from '@angular/material/icon';
-import { TranslatePipe } from '@ngx-translate/core';
 import { MatTooltip } from '@angular/material/tooltip';
-
-// const DAYS_TO_SHOW = 5;
-const D_HOURS = 24;
-const DRAG_CLONE_CLASS = 'drag-clone';
-const DRAG_OVER_CLASS = 'drag-over';
-const IS_DRAGGING_CLASS = 'is-dragging';
-const IS_NOT_DRAGGING_CLASS = 'is-not-dragging';
+import { GlobalTrackingIntervalService } from '../../../core/global-tracking-interval/global-tracking-interval.service';
+import { LS } from 'src/app/core/persistence/storage-keys.const';
+import { selectTimelineWorkStartEndHours } from '../../config/store/global-config.reducer';
+import { FH } from '../schedule.const';
+import { mapScheduleDaysToScheduleEvents } from '../map-schedule-data/map-schedule-days-to-schedule-events';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { ScheduleWeekComponent } from '../schedule-week/schedule-week.component';
+import { ScheduleMonthComponent } from '../schedule-month/schedule-month.component';
+import { ScheduleService } from '../schedule.service';
+import { TranslatePipe, TranslateService } from '@ngx-translate/core';
+import { T } from '../../../t.const';
+import { SCHEDULE_CONSTANTS } from '../schedule.constants';
+import { GlobalConfigService } from '../../config/global-config.service';
+import { DEFAULT_FIRST_DAY_OF_WEEK } from '../../../core/locale.constants';
+import { DateTimeFormatService } from '../../../core/date-time-format/date-time-format.service';
+import { getWeekNumber } from '../../../util/get-week-number';
+import { parseDbDateStr } from '../../../util/parse-db-date-str';
 
 @Component({
   selector: 'schedule',
   imports: [
-    AsyncPipe,
-    ScheduleEventComponent,
-    CdkDrag,
-    DatePipe,
-    CreateTaskPlaceholderComponent,
+    ScheduleWeekComponent,
+    ScheduleMonthComponent,
+    MatIconButton,
     MatIcon,
-    TranslatePipe,
     MatTooltip,
+    TranslatePipe,
+    MatMenu,
+    MatMenuContent,
+    MatMenuItem,
+    MatMenuTrigger,
   ],
   templateUrl: './schedule.component.html',
-  styleUrl: './schedule.component.scss',
+  styleUrls: ['./schedule.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
+  standalone: true,
+
+  host: {
+    '[style.--nr-of-days]': 'daysToShow().length',
+  },
 })
-export class ScheduleComponent implements AfterViewInit, OnDestroy {
+export class ScheduleComponent {
+  T = T;
   taskService = inject(TaskService);
   layoutService = inject(LayoutService);
-  shortcutService = inject(ShortcutService);
-  private _matDialog = inject(MatDialog);
-  private _calendarIntegrationService = inject(CalendarIntegrationService);
+  scheduleService = inject(ScheduleService);
   private _store = inject(Store);
-  private _dateService = inject(DateService);
   private _globalTrackingIntervalService = inject(GlobalTrackingIntervalService);
-  private _elRef = inject(ElementRef);
-  private locale = inject(LOCALE_ID);
+  private _globalConfigService = inject(GlobalConfigService);
+  private _dateTimeFormatService = inject(DateTimeFormatService);
+  private _translate = inject(TranslateService);
+  private _hiddenCalendarProviders = inject(HiddenCalendarProvidersService);
 
-  FH = FH;
-  IS_TOUCH_PRIMARY = IS_TOUCH_PRIMARY;
-  DRAG_DELAY_FOR_TOUCH = DRAG_DELAY_FOR_TOUCH;
-  rowsByNr = Array.from({ length: D_HOURS * FH }, (_, index) => index).filter(
-    (v, index) => index % FH === 0,
+  readonly hiddenCalendarProviderIds = this._hiddenCalendarProviders.hiddenProviderIds;
+  readonly enabledCalendarProviders = toSignal(
+    this._store
+      .select(selectCalendarProviders)
+      .pipe(map((ps) => ps.filter((p) => p.isEnabled))),
+    { initialValue: [] },
   );
+  // Show the button with multiple providers, OR with a single provider that
+  // is currently hidden — otherwise the user has no UI to re-enable the only
+  // calendar after, e.g., deleting all but one provider in settings.
+  readonly showCalFilterBtn = computed(() => {
+    const providers = this.enabledCalendarProviders();
+    if (providers.length > 1) return true;
+    const hidden = this.hiddenCalendarProviderIds();
+    return providers.some((p) => hidden.includes(p.id));
+  });
+  readonly calProviderLabel = (p: IssueProvider): string => getIssueProviderTooltip(p);
 
-  // events = [
+  toggleCalProvider(providerId: string): void {
+    this._hiddenCalendarProviders.toggle(providerId);
+  }
 
-  is12HourFormat = Intl.DateTimeFormat(this.locale, { hour: 'numeric' }).resolvedOptions()
-    .hour12;
-  times: string[] = this.rowsByNr.map((rowVal, index) => {
-    return this.is12HourFormat
-      ? index >= 13
-        ? (index - 12).toString() + ':00 PM'
-        : index.toString() + ':00 AM'
-      : index.toString() + ':00';
+  private _currentTimeViewMode = computed(() => this.layoutService.selectedTimeView());
+  isMonthView = computed(() => this._currentTimeViewMode() === 'month');
+  isDayView = computed(() => this._currentTimeViewMode() === 'day');
+  isWeekView = computed(() => this._currentTimeViewMode() === 'week');
+
+  // Navigation state - null = viewing today, Date = viewing selected date
+  private _selectedDate = signal<Date | null>(null);
+
+  // True when today falls within the currently displayed range.
+  // Disables the "today" reset button and suppresses navigation jumps.
+  isViewingToday = computed(() => {
+    if (this._selectedDate() === null) return true;
+    const todayStr = this._todayDateStr();
+    return todayStr ? this.daysToShow().includes(todayStr) : false;
   });
 
-  T: typeof T = T;
-  SVEType: typeof SVEType = SVEType;
-
-  endOfDayColRowStart: number = D_HOURS * 0.5 * FH;
-  currentTimeRow: number = 0;
-  totalRows: number = D_HOURS * FH;
-
-  daysToShow$ = this._globalTrackingIntervalService.todayDateStr$.pipe(
-    switchMap(() => {
-      return fromEvent(window, 'resize').pipe(
-        startWith(window.innerWidth),
-        debounceTime(50),
-        map(() => {
-          const width = window.innerWidth;
-          if (width < 600) {
-            return 3;
-          } else if (width < 900) {
-            return 4;
-          } else if (width < 1900) {
-            return 5;
-          } else if (width < 2200) {
-            return 7;
-          } else {
-            return 10;
-          }
-        }),
-        map((nrOfDaysToShow) => this._getDaysToShow(nrOfDaysToShow)),
-      );
-    }),
-  );
-  daysToShow: string[] = [];
-
-  scheduleDays$: Observable<ScheduleDay[]> = combineLatest([
-    this._store.pipe(select(selectTimelineTasks)),
-    this._store.pipe(select(selectTaskRepeatCfgsWithAndWithoutStartTime)),
-    this._store.pipe(select(selectTimelineConfig)),
-    this._calendarIntegrationService.icalEvents$,
-    this._store.pipe(select(selectPlannerDayMap)),
-    // because typing messes up if there are more than 6
-    combineLatest([this.taskService.currentTaskId$, this.daysToShow$]),
-  ]).pipe(
-    debounceTime(50),
-    // debounceTime(1250),
-    map(
-      ([
-        { planned, unPlanned },
-        { withStartTime, withoutStartTime },
-        timelineCfg,
-        icalEvents,
-        plannerDayMap,
-        [currentId, daysToShow],
-      ]) =>
-        mapToScheduleDays(
-          Date.now(),
-          daysToShow,
-          unPlanned,
-          planned,
-          withStartTime,
-          withoutStartTime,
-          icalEvents,
-          currentId,
-          plannerDayMap,
-          timelineCfg?.isWorkStartEndEnabled
-            ? {
-                startTime: timelineCfg.workStart,
-                endTime: timelineCfg.workEnd,
-              }
-            : undefined,
-          timelineCfg?.isLunchBreakEnabled
-            ? {
-                startTime: timelineCfg.lunchBreakStart,
-                endTime: timelineCfg.lunchBreakEnd,
-              }
-            : undefined,
-        ),
+  protected _todayDateStr = toSignal(this._globalTrackingIntervalService.todayDateStr$);
+  private _windowSize = toSignal(
+    fromEvent(window, 'resize').pipe(
+      startWith({ width: window.innerWidth, height: window.innerHeight }),
+      debounceTime(50),
+      map(() => ({ width: window.innerWidth, height: window.innerHeight })),
     ),
-
-    // NOTE: this doesn't require cd.detect changes because view is already re-checked with obs
-    tap(() => (this.now = Date.now())),
+    { initialValue: { width: window.innerWidth, height: window.innerHeight } },
   );
 
-  eventsAndBeyondBudget$: Observable<{
-    eventsFlat: ScheduleEvent[];
-    beyondBudgetDays: ScheduleEvent[][];
-  }> = this.scheduleDays$.pipe(map((days) => mapScheduleDaysToScheduleEvents(days, FH)));
+  shouldEnableHorizontalScroll = computed(() => {
+    const selectedView = this._currentTimeViewMode();
+    // Only enable horizontal scroll for week view when viewport is narrow
+    if (selectedView !== 'week') {
+      return false;
+    }
+    // Enable scroll when viewport is smaller than what's needed for 7 days
+    return this._windowSize().width < SCHEDULE_CONSTANTS.HORIZONTAL_SCROLL_THRESHOLD;
+  });
 
-  workStartEnd$ = this._store.pipe(select(selectTimelineWorkStartEndHours)).pipe(
-    map((v) => {
-      return (
-        v && {
-          // NOTE: +1 because grids start at 1
-          workStartRow: Math.round(FH * v.workStart) + 1,
-          workEndRow: Math.round(FH * v.workEnd) + 1,
-        }
+  private _daysToShowCount = computed(() => {
+    const size = this._windowSize();
+    const selectedView = this._currentTimeViewMode();
+    const width = size.width;
+    const height = size.height;
+
+    if (selectedView === 'day') return 1;
+
+    if (selectedView === 'month') {
+      const availableHeight = height - SCHEDULE_CONSTANTS.MONTH_VIEW.HEADER_OFFSET;
+      const minHeightPerWeek =
+        width < SCHEDULE_CONSTANTS.BREAKPOINTS.TABLET
+          ? SCHEDULE_CONSTANTS.MONTH_VIEW.MIN_HEIGHT_PER_WEEK_MOBILE
+          : SCHEDULE_CONSTANTS.MONTH_VIEW.MIN_HEIGHT_PER_WEEK_DESKTOP;
+      const maxWeeks = Math.floor(availableHeight / minHeightPerWeek);
+
+      if (maxWeeks < SCHEDULE_CONSTANTS.MONTH_VIEW.MIN_WEEKS) {
+        return SCHEDULE_CONSTANTS.MONTH_VIEW.MIN_WEEKS;
+      } else if (maxWeeks > SCHEDULE_CONSTANTS.MONTH_VIEW.MAX_WEEKS) {
+        return SCHEDULE_CONSTANTS.MONTH_VIEW.MAX_WEEKS;
+      } else {
+        return maxWeeks;
+      }
+    }
+
+    // Week view: always 7 days
+    return 7;
+  });
+
+  daysToShow = computed(() => {
+    const count = this._daysToShowCount();
+    const selectedView = this._currentTimeViewMode();
+    const selectedDate = this._selectedDate();
+    // Trigger re-computation when today changes
+    this._todayDateStr();
+
+    if (selectedView === 'month') {
+      return this.scheduleService.getMonthDaysToShow(
+        count,
+        this.firstDayOfWeek(),
+        selectedDate,
       );
-    }),
-  );
-  workStartEnd: { workStartRow: number; workEndRow: number } | null = null;
+    }
+    return this.scheduleService.getDaysToShow(count, selectedDate);
+  });
 
-  events$: Observable<ScheduleEvent[]> = this.eventsAndBeyondBudget$.pipe(
-    map(({ eventsFlat }) => eventsFlat),
-  );
-  beyondBudget$: Observable<ScheduleEvent[][]> = this.eventsAndBeyondBudget$.pipe(
-    map(({ beyondBudgetDays }) => beyondBudgetDays),
-  );
+  weeksToShow = computed(() => Math.ceil(this.daysToShow().length / 7));
 
-  currentTimeRow$ = this.scheduleDays$.pipe(
-    map((days) => {
-      const now = new Date();
-      const hours = now.getHours();
-      const minutes = now.getMinutes();
-      // eslint-disable-next-line no-mixed-operators
-      const hoursToday = hours + minutes / 60;
-      const row = Math.round(hoursToday * FH);
-      return row;
-    }),
+  // Memoized so headerTitle only re-runs at the breakpoint boundary,
+  // not on every debounced resize tick.
+  private _isCompact = computed(
+    () => this._windowSize().width < SCHEDULE_CONSTANTS.BREAKPOINTS.XS,
+  );
+  private _isVeryCompact = computed(
+    () => this._windowSize().width < SCHEDULE_CONSTANTS.BREAKPOINTS.XXS,
+  );
+  private _isTablet = computed(
+    () => this._windowSize().width < SCHEDULE_CONSTANTS.BREAKPOINTS.TABLET,
   );
 
-  newTaskPlaceholder$ = new BehaviorSubject<{
-    style: string;
-    time: string;
-    date: string;
-  } | null>(
-    null,
-    //   {
-    //   style: 'grid-row: 149 / span 4; grid-column: 4 / span 1',
-    //   time: '12:00',
-    //   date: '11/11/2021',
-    // }
+  headerTitle = computed(() => {
+    const days = this.daysToShow();
+    if (!days.length) return '';
+    const locale = this._dateTimeFormatService.currentLocale();
+
+    if (this.isDayView()) {
+      // On tablet width and below the full date clips, so drop to month + day
+      // (the weekday still shows in the day-column header).
+      const dayOpts: Intl.DateTimeFormatOptions = this._isTablet()
+        ? { month: 'short', day: 'numeric' }
+        : { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' };
+      return new Intl.DateTimeFormat(locale, dayOpts).format(parseDbDateStr(days[0]));
+    }
+
+    if (this.isMonthView()) {
+      const mid = parseDbDateStr(days[Math.floor(days.length / 2)]);
+      return safeFormatDate(mid, 'LLLL yyyy', locale);
+    }
+
+    const start = parseDbDateStr(days[0]);
+    const end = parseDbDateStr(days[days.length - 1]);
+    const weekNr = getWeekNumber(start); // ISO — default firstDayOfWeek=1
+    const sameMonth =
+      start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
+    const startStr = safeFormatDate(start, 'MMM d', locale);
+    const endStr = sameMonth
+      ? safeFormatDate(end, 'd', locale)
+      : safeFormatDate(end, 'MMM d', locale);
+    const labelKey = this._isCompact()
+      ? T.F.WORKLOG.CMP.WEEK_NR_SHORT
+      : T.F.WORKLOG.CMP.WEEK_NR;
+    const label = this._translate.instant(labelKey, { nr: weekNr });
+    if (this._isVeryCompact()) return label;
+    return `${label} · ${startStr} – ${endStr}`;
+  });
+
+  firstDayOfWeek = computed(() => {
+    const cfg = this._globalConfigService.localization()?.firstDayOfWeek;
+    return cfg !== null && cfg !== undefined ? cfg : DEFAULT_FIRST_DAY_OF_WEEK;
+  });
+
+  // Calculate context-aware "now" based on selected date
+  // When viewing a future week, use the start of that week as reference time
+  private _contextNow = computed(() => {
+    // Date.now() is not reactive and computeds cache, so without a time-varying
+    // dependency the reference would freeze at whatever instant this last ran.
+    // Same 2-min tick currentTimeRow and scheduleDays already refresh on.
+    this.scheduleService.scheduleRefreshTick();
+
+    const selectedDate = this._selectedDate();
+    if (selectedDate === null) {
+      return Date.now();
+    }
+
+    // contextNow anchors dayDates[0] (`startTime = i == 0 ? now` in
+    // create-schedule-days), so it has to stay inside that day. Testing where the
+    // wall clock sits within the selected day - rather than comparing day strings -
+    // lets the view self-correct once it drifts under a midnight rollover (a day
+    // picked as "tomorrow" becomes today while the view stays put), and can never
+    // hand the mapper a now past day 0's end, which would push every entry out of
+    // the column.
+    const dayStart = new Date(selectedDate);
+    dayStart.setHours(0, 0, 0, 0);
+    // setDate rather than +24h: DST-safe day advancement.
+    const nextDayStart = new Date(dayStart);
+    nextDayStart.setDate(nextDayStart.getDate() + 1);
+
+    const now = Date.now();
+    return now >= dayStart.getTime() && now < nextDayStart.getTime()
+      ? now
+      : dayStart.getTime();
+  });
+
+  scheduleDays = computed(() => {
+    return this.scheduleService.createScheduleDaysWithContext({
+      daysToShow: this.daysToShow(),
+      contextNow: this._contextNow(),
+      realNow: Date.now(),
+      currentTaskId: this.taskService.currentTaskId() ?? null,
+    });
+  });
+
+  private _eventsAndBeyondBudget = computed(() => {
+    const days = this.scheduleDays();
+    return mapScheduleDaysToScheduleEvents(days, FH);
+  });
+
+  private _workStartEndHours = toSignal(
+    this._store.pipe(select(selectTimelineWorkStartEndHours)),
   );
 
-  // currentTimeSpan$: Observable<{ from: string; to: string }> = this.daysToShow$.pipe(
-  //   map((days) => {
-  //     const from = new Date(days[0]);
-  //     const to = new Date(days[days.length - 1]);
-  //     return {
-  //       // from: isToday(from)
-  //       //   ? 'Today'
-  //       //   : from.toLocaleDateString(this.locale, { day: 'numeric', month: 'numeric' }),
-  //       from: from.toLocaleDateString(this.locale, { day: 'numeric', month: 'numeric' }),
-  //       to: to.toLocaleDateString(this.locale, { day: 'numeric', month: 'numeric' }),
-  //     };
-  //   }),
-  // );
-  // timelineDays$: Observable<ScheduleDay[]> = this.timelineEntries$.pipe(
-  //   map((entries) => mapTimelineEntriesToDays(entries)),
-  // );
+  workStartEnd = computed(() => {
+    const v = this._workStartEndHours();
+    return (
+      v && {
+        // NOTE: +1 because grids start at 1
+        workStartRow: Math.round(FH * v.workStart) + 1,
+        workEndRow: Math.round(FH * v.workEnd) + 1,
+      }
+    );
+  });
 
-  now: number = Date.now();
-  tomorrow: number = getTomorrow(0).getTime();
-  isDragging = false;
-  isDraggingDelayed = false;
-  isCreateTaskActive = false;
-  containerExtraClass = IS_NOT_DRAGGING_CLASS;
-  prevDragOverEl: HTMLElement | null = null;
-  dragCloneEl: HTMLElement | null = null;
-  destroyRef = inject(DestroyRef);
+  events = computed(() => this._eventsAndBeyondBudget().eventsFlat);
+  beyondBudget = computed(() => this._eventsAndBeyondBudget().beyondBudgetDays);
+  monthEvents = computed(() => this.events().concat(...this.beyondBudget()));
 
-  readonly gridContainer = viewChild.required<ElementRef>('gridContainer');
+  currentTimeRow = computed(() => {
+    // Only show current time indicator when viewing today
+    if (!this.isViewingToday()) {
+      return null;
+    }
 
-  private _currentAniTimeout: number | undefined;
+    // Trigger re-computation every 2 minutes
+    this.scheduleService.scheduleRefreshTick();
+    const now = new Date();
+    const hours = now.getHours();
+    const minutes = now.getMinutes();
+
+    const hoursToday = hours + minutes / 60;
+    return Math.round(hoursToday * FH);
+  });
+
+  goToPreviousPeriod(): void {
+    // Never navigate into the past — the displayed range must include today or later
+    if (this.isViewingToday()) return;
+
+    const currentDate = this._selectedDate() || new Date();
+    const selectedView = this._currentTimeViewMode();
+
+    if (selectedView === 'month') {
+      const previousMonth = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth() - 1,
+        1,
+      );
+      this._selectedDate.set(previousMonth);
+    } else {
+      const daysToSkip = this.daysToShow().length;
+      const previousPeriod = new Date(currentDate);
+      previousPeriod.setDate(currentDate.getDate() - daysToSkip);
+      previousPeriod.setHours(0, 0, 0, 0);
+
+      // If going back would land on or before today, snap to "today view" (null)
+      const todayMidnight = new Date();
+      todayMidnight.setHours(0, 0, 0, 0);
+      if (previousPeriod.getTime() <= todayMidnight.getTime()) {
+        this._selectedDate.set(null);
+      } else {
+        this._selectedDate.set(previousPeriod);
+      }
+    }
+  }
+
+  goToNextPeriod(): void {
+    const currentDate = this._selectedDate() || new Date();
+    const selectedView = this._currentTimeViewMode();
+
+    if (selectedView === 'month') {
+      // Jump to first day of next month
+      const nextMonth = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth() + 1,
+        1,
+      );
+      this._selectedDate.set(nextMonth);
+    } else {
+      // Week view: move forward by the number of days currently shown
+      // (automatically adapts to responsive day count: 2, 3, 5, or 7 days)
+      const daysToSkip = this.daysToShow().length;
+      const nextPeriod = new Date(currentDate);
+      nextPeriod.setDate(currentDate.getDate() + daysToSkip);
+      nextPeriod.setHours(0, 0, 0, 0);
+      this._selectedDate.set(nextPeriod);
+    }
+  }
+
+  goToToday(): void {
+    this._selectedDate.set(null); // Resets to "today" mode
+  }
+
+  // Tracks whether the scroll-wrapper has been scrolled horizontally. Used
+  // by schedule-week so the sticky time column gets a background only once
+  // day-content is actually sliding under it.
+  isHScrolled = signal(false);
+
+  onScrollWrapperScroll(event: Event): void {
+    const el = event.target as HTMLElement;
+    this.isHScrolled.set(el.scrollLeft > 0);
+  }
+
+  // Scroll a target element into view inside the scroll-wrapper, but pull
+  // horizontally back by the sticky time column's width (+ a bit extra) so
+  // the target doesn't end up sitting under the time column.
+  private _scrollIntoViewWithTimeColumnOffset(elementId: string): void {
+    const element = document.getElementById(elementId);
+    const scrollContainer = element?.closest('.scroll-wrapper') as HTMLElement | null;
+    if (!element || !scrollContainer) return;
+
+    const timeCol = scrollContainer.querySelector(
+      'schedule-week .time-column-bg, schedule-week .filler',
+    );
+    // `.filler` is `display:none` in side-panel mode, so a 0-width hit
+    // here means we matched the hidden one — fall back to the default.
+    const timeColWidth = timeCol?.getBoundingClientRect().width || 48;
+    const EXTRA_PX = 12;
+
+    const elRect = element.getBoundingClientRect();
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const targetTop = scrollContainer.scrollTop + elRect.top - containerRect.top;
+    const targetLeft =
+      scrollContainer.scrollLeft +
+      elRect.left -
+      containerRect.left -
+      timeColWidth -
+      EXTRA_PX;
+
+    scrollContainer.scrollTo({
+      top: Math.max(0, targetTop),
+      left: Math.max(0, targetLeft),
+      behavior: 'instant',
+    });
+  }
+
+  selectTimeView(view: 'week' | 'month' | 'day'): void {
+    this.layoutService.selectedTimeView.set(view);
+    localStorage.setItem(LS.SELECTED_TIME_VIEW, view);
+  }
+
+  private getTimeView(): 'week' | 'month' | 'day' {
+    const preservedView = localStorage.getItem(LS.SELECTED_TIME_VIEW);
+    if (preservedView === 'month') return 'month';
+    if (preservedView === 'day') return 'day';
+    return 'week';
+  }
 
   constructor() {
-    if (!localStorage.getItem(LS.WAS_SCHEDULE_INITIAL_DIALOG_SHOWN)) {
-      this._matDialog.open(DialogTimelineSetupComponent, {
-        data: { isInfoShownInitially: true },
-      });
-    }
+    this.layoutService.selectedTimeView.set(this.getTimeView());
 
-    this.daysToShow$.pipe(takeUntilDestroyed()).subscribe((days) => {
-      this.daysToShow = days;
-      this._elRef.nativeElement.style.setProperty('--nr-of-days', days.length);
+    effect(() => {
+      if (this.isMonthView() === false) {
+        // scroll to work start whenever view is switched to work-week
+        setTimeout(() => this._scrollIntoViewWithTimeColumnOffset('work-start'));
+      }
     });
-    this.workStartEnd$.pipe(takeUntilDestroyed()).subscribe((v) => {
-      this.workStartEnd = v;
-      this.endOfDayColRowStart = v?.workStartRow || D_HOURS * 0.5 * FH;
-    });
-    this.currentTimeRow$.pipe(takeUntilDestroyed()).subscribe((v) => {
-      this.currentTimeRow = v;
-    });
-  }
-
-  ngAfterViewInit(): void {
-    this.workStartEnd$
-      .pipe(
-        takeUntilDestroyed(this.destroyRef),
-        first(),
-        delay(400),
-        // switchMap((wCfg) => timer(300, 300).pipe(mapTo(wCfg))),
-        // take(2),
-      )
-      .subscribe((workStartCfg) => {
-        if (workStartCfg) {
-          document
-            .querySelector('.work-start')
-            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        }
-      });
-  }
-
-  ngOnDestroy(): void {
-    window.clearTimeout(this._currentAniTimeout);
-  }
-
-  onGridClick(ev: MouseEvent): void {
-    if (ev.target instanceof HTMLElement && ev.target.classList.contains('col')) {
-      this.isCreateTaskActive = true;
-    }
-  }
-
-  @throttle(30)
-  onMoveOverGrid(ev: MouseEvent): void {
-    if (this.isDragging || this.isDraggingDelayed) {
-      return;
-    }
-    if (this.isCreateTaskActive) {
-      return;
-    }
-
-    // console.log(ev);
-    if (ev.target instanceof HTMLElement && ev.target.classList.contains('col')) {
-      const gridContainer = this.gridContainer().nativeElement;
-      const gridStyles = window.getComputedStyle(gridContainer);
-
-      const rowSizes = gridStyles.gridTemplateRows
-        .split(' ')
-        .map((size) => parseFloat(size));
-
-      let rowIndex = 0;
-      let yOffset = ev.offsetY;
-
-      for (let i = 0; i < rowSizes.length; i++) {
-        if (yOffset < rowSizes[i]) {
-          rowIndex = i + 1;
-          break;
-        }
-        yOffset -= rowSizes[i];
-      }
-
-      const targetColRowOffset = +ev.target.style.gridRowStart - 2;
-      const targetColColOffset = +ev.target.style.gridColumnStart;
-      // console.log(ev.offsetY, targetColRowOffset, targetColColOffset, rowIndex);
-
-      // for mobile, we use blocks of 15 minutes
-      // eslint-disable-next-line no-mixed-operators
-      const targetRow = IS_TOUCH_PRIMARY ? Math.floor(rowIndex / 3) * 3 - 1 : rowIndex;
-      const row = targetRow + targetColRowOffset;
-      const hours = Math.floor((row - 1) / FH);
-      const minutes = Math.floor(((row - 1) % FH) * (60 / FH));
-      const time = `${hours}:${minutes.toString().padStart(2, '0')}`;
-
-      this.newTaskPlaceholder$.next({
-        style: `grid-row: ${row} / span 6; grid-column: ${targetColColOffset} / span 1`,
-        time,
-        date: this.daysToShow[targetColColOffset - 2],
-      });
-    } else {
-      this.newTaskPlaceholder$.next(null);
-    }
-  }
-
-  @throttle(30)
-  dragMoved(ev: CdkDragMove<ScheduleEvent>): void {
-    // sometimes drag move fires after drag release, leaving elements in a drag over state, if we don't do this
-    if (!this.isDragging) {
-      return;
-    }
-
-    // console.log('dragMoved', ev);
-    ev.source.element.nativeElement.style.pointerEvents = 'none';
-    const targetEl = document.elementFromPoint(
-      ev.pointerPosition.x,
-      ev.pointerPosition.y,
-    ) as HTMLElement;
-    if (!targetEl) {
-      return;
-    }
-    // the clone element should be ignored for drag over class
-    if (targetEl.classList.contains(DRAG_CLONE_CLASS)) {
-      return;
-    }
-    // console.log(targetEl.id, targetEl);
-
-    if (targetEl !== this.prevDragOverEl) {
-      console.log('dragMoved targetElChanged', targetEl);
-
-      if (this.prevDragOverEl) {
-        this.prevDragOverEl.classList.remove(DRAG_OVER_CLASS);
-      }
-      this.prevDragOverEl = targetEl;
-
-      if (
-        targetEl.classList.contains(SVEType.Task) ||
-        targetEl.classList.contains(SVEType.SplitTask) ||
-        targetEl.classList.contains(SVEType.SplitTaskPlannedForDay) ||
-        targetEl.classList.contains(SVEType.TaskPlannedForDay)
-      ) {
-        targetEl.classList.add(DRAG_OVER_CLASS);
-      } else if (targetEl.classList.contains('col')) {
-        targetEl.classList.add(DRAG_OVER_CLASS);
-      }
-    }
-  }
-
-  dragStarted(ev: CdkDragStart<ScheduleEvent>): void {
-    console.log('dragStart', ev);
-    this.isDragging = this.isDraggingDelayed = true;
-    this.containerExtraClass = IS_DRAGGING_CLASS + '  ' + ev.source.data.type;
-
-    const cur = ev.source.element.nativeElement;
-    if (this.dragCloneEl) {
-      this.dragCloneEl.remove();
-    }
-    this.dragCloneEl = cur.cloneNode(true) as HTMLElement;
-    this.dragCloneEl.style.transform = 'translateY(0)';
-    this.dragCloneEl.style.opacity = '.1';
-    // NOTE: used to avoid interfering with  the drag over class
-    this.dragCloneEl.classList.add(DRAG_CLONE_CLASS);
-    // this.dragCloneEl.style.pointerEvents = 'none';
-    cur.parentNode?.insertBefore(this.dragCloneEl, cur);
-  }
-
-  dragReleased(ev: CdkDragRelease): void {
-    console.log('dragReleased', {
-      target: ev.event.target,
-      source: ev.source.element.nativeElement,
-      ev,
-      dragOverEl: this.prevDragOverEl,
-    });
-
-    // for very short drags prevDragOverEl is undefined. For desktop only the event.target can be used instead
-    const target = (this.prevDragOverEl || ev.event.target) as HTMLElement;
-    if (this.prevDragOverEl) {
-      this.prevDragOverEl.classList.remove(DRAG_OVER_CLASS);
-      this.prevDragOverEl = null;
-    }
-    if (this.dragCloneEl) {
-      this.dragCloneEl.remove();
-    }
-
-    this.isDragging = false;
-    ev.source.element.nativeElement.style.pointerEvents = '';
-    ev.source.element.nativeElement.style.opacity = '0';
-
-    setTimeout(() => {
-      if (ev.source.element?.nativeElement?.style) {
-        ev.source.element.nativeElement.style.opacity = '';
-        // NOTE: doing this again fixes the issue that the element remains in the wrong state sometimes
-        ev.source.element.nativeElement.style.pointerEvents = '';
-      }
-      this.isDraggingDelayed = false;
-    }, 100);
-
-    this.containerExtraClass = IS_NOT_DRAGGING_CLASS;
-
-    if (target.tagName.toLowerCase() === 'div' && target.classList.contains('col')) {
-      const isMoveToEndOfDay = target.classList.contains('end-of-day');
-      const targetDay = (target as any).day || target.getAttribute('data-day');
-      console.log({ targetDay });
-      if (targetDay) {
-        this._store.dispatch(
-          PlannerActions.planTaskForDay({
-            task: ev.source.data.data,
-            day: targetDay,
-            isAddToTop: !isMoveToEndOfDay,
-          }),
-        );
-
-        // this._aniMoveToItem(ev.source.element.nativeElement, () => ev.source.reset());
-        // return;
-      }
-    } else if (target.tagName.toLowerCase() === 'schedule-event') {
-      // const sourceTaskId = ev.source.data.data.id;
-      const sourceTaskId = ev.source.element.nativeElement.id.replace(T_ID_PREFIX, '');
-      const targetTaskId = target.id.replace(T_ID_PREFIX, '');
-      console.log(sourceTaskId === targetTaskId, sourceTaskId, targetTaskId);
-
-      if (
-        sourceTaskId &&
-        sourceTaskId.length > 0 &&
-        targetTaskId &&
-        sourceTaskId !== targetTaskId
-      ) {
-        console.log('sourceTaskId', sourceTaskId, 'targetTaskId', targetTaskId);
-        this._store.dispatch(
-          PlannerActions.moveBeforeTask({
-            fromTask: ev.source.data.data,
-            toTaskId: targetTaskId,
-          }),
-        );
-        // ev.source.element.nativeElement.style.opacity = '0';
-        // ev.source.element.nativeElement.style.transition = 'none';
-        // ev.source.element.nativeElement.style.transform = 'translate3d(0, 0, 0)';
-        // ev.source.element.nativeElement.style.transition = '';
-        //
-        // setTimeout(() => {
-        //   ev.source.element.nativeElement.style.opacity = '';
-        // });
-      }
-    }
-
-    ev.source.element.nativeElement.style.transform = 'translate3d(0, 0, 0)';
-    ev.source.reset();
-  }
-
-  private _aniMoveToItem(targetEl: HTMLElement, resetFn: () => void): void {
-    // targetEl.style.opacity = '0';
-    targetEl.style.transition = 'none';
-    targetEl.style.transform = this._replaceFirstNumberInTranslate3d(
-      targetEl.style.transform,
-      0,
-    );
-
-    this._currentAniTimeout = window.setTimeout(() => {
-      targetEl.style.opacity = '';
-      targetEl.style.transition = '';
-      targetEl.style.transform = 'translate3d(0, 0, 0)';
-
-      resetFn();
-    }, 100);
-  }
-
-  private _getDaysToShow(nrOfDaysToShow: number): string[] {
-    const today = new Date().getTime();
-    const daysToShow: string[] = [];
-    for (let i = 0; i < nrOfDaysToShow; i++) {
-      // eslint-disable-next-line no-mixed-operators
-      daysToShow.push(this._dateService.todayStr(today + i * 24 * 60 * 60 * 1000));
-    }
-    return daysToShow;
-  }
-
-  private _replaceFirstNumberInTranslate3d(input: string, newNumber: number): string {
-    const parts = input.split(',');
-    parts[0] = `translate3d(${newNumber}`;
-    return parts.join(',');
   }
 }

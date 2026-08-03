@@ -1,4 +1,4 @@
-@import '../../../variables';
+@use '../../../styles/_globals.scss' as *;
 //@import '../../../tasks/task/task.component.mixins';
 
 // TODO rename to task title component
@@ -14,76 +14,126 @@
   // needed for z-index to work
   position: relative;
   user-select: none;
-  -webkit-user-select: none; /* Safari */
-  caret-color: #000000;
-  border-radius: 4px;
-  //z-index: $z-task-title;
+  border-radius: var(--card-border-radius);
+  //z-index: var(--z-task-title);
   z-index: 4;
   border: 1px solid transparent;
-  transition: $transition-leave;
-
-  @include darkTheme() {
-    caret-color: #ffffff;
-  }
+  transition: var(--transition-leave);
+  padding: 3px 3px 3px 5px;
+  cursor: text;
 
   &:focus {
     outline: none !important;
   }
 
   &.is-focused {
-    transition: $transition-enter;
-    //z-index: $z-task-title-focus !important;
-    z-index: 32 !important;
-    border: 1px solid $c-accent;
+    transition: var(--transition-enter);
+    z-index: var(--z-task-title-focus) !important;
+    border: 1px solid var(--focus-ring-color);
     @include inlineEditElevation();
-    box-shadow: $whiteframe-shadow-4dp;
+    box-shadow: var(--whiteframe-shadow-4dp);
+  }
+
+  // In readonly mode, use default cursor instead of text cursor
+  &.is-readonly {
+    cursor: inherit;
   }
 }
 
-:host > div {
+.wrapper {
   position: relative;
   width: 100%;
 }
-:host,
-:host > div > textarea {
-  padding: 3px 3px 3px 5px;
-}
-:host > div > textarea {
-  appearance: none;
-  //background: rgba(0, 0, 0, 0.5);
-  border: 0;
+.display-value {
+  // Static positioning when not editing - contributes to wrapper height
+  position: static;
+  display: block;
   padding: 0;
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  top: 0;
-  cursor: text;
+  margin: 0;
+  opacity: 1;
+  transition: opacity var(--transition-standard);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  text-wrap-mode: wrap;
+  text-indent: 0;
+  font-size: inherit;
+  letter-spacing: inherit;
+  font-family: var(--font-primary-stack);
+  color: inherit;
+  min-height: 20px;
+  line-height: 1.5;
+  width: 100%;
 
-  &:focus {
-    user-select: text;
-    -webkit-user-select: text; /* Safari */
-    outline: none;
-    // NOTE: needed to overwrite color for current task
-    color: $light-theme-text-color;
-
-    @include darkTheme() {
-      color: #fff;
-    }
+  // Ensure links don't add extra spacing.
+  // pointer-events: auto overrides inherited pointer-events: none from parent
+  // (e.g. task.component sets pointer-events: none on touch-primary devices for drag).
+  a {
+    margin: 0;
+    padding: 0;
+    line-height: inherit;
+    vertical-align: baseline;
+    cursor: pointer;
+    pointer-events: auto;
   }
 }
 
-:host > div > textarea,
-:host > div > span {
+.display-value.is-placeholder {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.wrapper > textarea {
+  appearance: none;
+  //background: var(--c-dark-50);
+  cursor: text;
+  position: absolute;
+  inset: 0;
+  font-weight: 500;
   font-size: inherit;
   letter-spacing: inherit;
-  font-family: inherit;
+  font-family: var(--font-primary-stack);
   border-radius: inherit;
   outline: none;
   color: inherit;
   margin: 0;
   max-width: 100%;
   display: block;
+  background: transparent;
+  resize: none;
+  width: 100%;
+  overflow: hidden;
+  min-height: 20px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space-collapse: preserve;
+  border: none;
+  text-wrap-mode: wrap;
+  text-indent: 0;
+  padding: 0;
+
+  &:focus {
+    user-select: text;
+    -webkit-user-select: text; /* Safari */
+    outline: none;
+    // NOTE: needed to overwrite color for current task
+    color: var(--text-color-most-intense);
+  }
+}
+
+.height-measure {
+  position: static;
+  visibility: hidden;
+  pointer-events: none;
+  display: block;
+  font-weight: 500;
+  font-size: inherit;
+  letter-spacing: inherit;
+  font-family: var(--font-primary-stack);
+  border-radius: inherit;
+  outline: none;
+  color: inherit;
+  margin: 0;
+  max-width: 100%;
   appearance: none;
   background: transparent;
   resize: none;
@@ -91,17 +141,18 @@
   overflow: hidden;
   min-height: 20px;
   line-height: 1.5;
-  overflow-wrap: break-word;
+  overflow-wrap: anywhere;
   white-space-collapse: preserve;
   border: none;
   text-wrap-mode: wrap;
   text-indent: 0;
 }
 
-:host > div > span {
+.is-editing .display-value {
+  // When editing, position absolutely to match textarea
+  position: absolute;
+  inset: 0;
+  opacity: 0;
   visibility: hidden;
-  opacity: 0.4;
-  outline: 1px solid orange;
   pointer-events: none;
-  display: block;
 }

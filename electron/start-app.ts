@@ -1,16 +1,10 @@
 import { initIpcInterfaces } from './ipc-handler';
-import electronLog, { info, log } from 'electron-log/main';
-import {
-  App,
-  app,
-  BrowserWindow,
-  globalShortcut,
-  powerMonitor,
-  protocol,
-} from 'electron';
+import { initPluginOAuth } from './plugin-oauth';
+import electronLog, { info, log, warn } from 'electron-log/main';
+import { App, app, BrowserWindow, globalShortcut, ipcMain, powerMonitor } from 'electron';
 import { join } from 'path';
 import { initDebug } from './debug';
-import * as electronDl from 'electron-dl';
+import electronDl from 'electron-dl';
 import { IPC } from './shared-with-frontend/ipc-events.const';
 import { initBackupAdapter } from './backup';
 import { initLocalFileSyncAdapter } from './local-file-sync';
@@ -19,9 +13,20 @@ import { CONFIG } from './CONFIG';
 import { lazySetInterval } from './shared-with-frontend/lazy-set-interval';
 import { initIndicator } from './indicator';
 import { quitApp, showOrFocus } from './various-shared';
-import { createWindow } from './main-window';
+import { closeWinAndQuit, createWindow, getIsAppReady } from './main-window';
+import { IdleTimeHandler } from './idle-time-handler';
+import { destroyTaskWidget } from './task-widget/task-widget';
+import {
+  initializeProtocolHandling,
+  processPendingProtocolUrls,
+} from './protocol-handler';
+import { getIsQuiting, setIsLocked } from './shared-state';
+import { clearStaleLevelDbLocks } from './clear-stale-idb-locks';
+import { evaluateGpuStartupGuard } from './gpu-startup-guard';
+import * as fs from 'fs';
 
 const ICONS_FOLDER = __dirname + '/assets/icons/';
+const APP_DISPLAY_NAME = 'Super Productivity';
 const IS_MAC = process.platform === 'darwin';
 // const DESKTOP_ENV = process.env.DESKTOP_SESSION;
 // const IS_GNOME = DESKTOP_ENV === 'gnome' || DESKTOP_ENV === 'gnome-xorg';
@@ -37,22 +42,63 @@ if (IS_DEV) {
   log('Starting in DEV Mode!!!');
 }
 
-interface MyApp extends App {
-  isQuiting?: boolean;
-  isLocked?: boolean;
-}
-
-const appIN: MyApp = app;
+const appIN: App = app;
 
 let mainWin: BrowserWindow;
+let idleTimeHandler: IdleTimeHandler;
 
 export const startApp = (): void => {
+  // Initialize protocol handling (registers second-instance listener for URL forwarding)
+  initializeProtocolHandling(IS_DEV, app, () => mainWin);
+
   // LOAD IPC STUFF
   initIpcInterfaces();
 
   electronLog.initialize();
 
   app.commandLine.appendSwitch('enable-speech-dispatcher');
+
+  // work around for #4375
+  // https://github.com/super-productivity/super-productivity/issues/4375#issuecomment-2883838113
+  // https://github.com/electron/electron/issues/46538#issuecomment-2808806722
+  app.commandLine.appendSwitch('gtk-version', '3');
+
+  // Force X11 in Snap on Wayland sessions or when the gnome-42-2204 runtime
+  // is missing. Chromium's Wayland EGL/GBM init can fail against the Mesa
+  // shipped by gnome-42-2204 when the snap runtime's Mesa version drifts
+  // out of sync with what Electron's Chromium expects, producing
+  // "Failed to get system egl display" / "MESA-LOADER failed to open
+  // dri_gbm.so" and a failed GPU process. The X11 ozone backend avoids the
+  // failing Wayland EGL init path while keeping hardware acceleration — at
+  // the cost of Wayland-native features (fractional scaling, per-monitor
+  // HiDPI, native IME, client-side decorations). Override with
+  // `--ozone-platform=wayland`.
+  // IMPORTANT: must run before app.whenReady() — ozone platform is read
+  // during Chromium init and cannot be changed after ready fires.
+  const hasOzoneOverride = process.argv.some(
+    (arg) => arg === '--ozone-platform' || arg.startsWith('--ozone-platform='),
+  );
+  if (process.platform === 'linux' && process.env.SNAP && !hasOzoneOverride) {
+    const isWaylandSession =
+      process.env.XDG_SESSION_TYPE === 'wayland' || !!process.env.WAYLAND_DISPLAY;
+
+    let isGnomePlatformMissing = false;
+    try {
+      const gnomePlatformPath = join(process.env.SNAP || '', 'gnome-platform');
+      isGnomePlatformMissing =
+        !fs.existsSync(gnomePlatformPath) ||
+        fs.readdirSync(gnomePlatformPath).length === 0;
+    } catch {
+      isGnomePlatformMissing = true;
+    }
+
+    if (isWaylandSession || isGnomePlatformMissing) {
+      app.commandLine.appendSwitch('ozone-platform', 'x11');
+      log(
+        `Snap: forcing X11 (wayland=${isWaylandSession}, gnomePlatformMissing=${isGnomePlatformMissing}, XDG_SESSION_TYPE=${process.env.XDG_SESSION_TYPE ?? 'unset'}, WAYLAND_DISPLAY=${process.env.WAYLAND_DISPLAY ? 'set' : 'unset'})`,
+      );
+    }
+  }
 
   // NOTE: needs to be executed before everything else
   process.argv.forEach((val) => {
@@ -67,7 +113,10 @@ export const startApp = (): void => {
     }
 
     if (val && val.includes('--user-data-dir=')) {
-      const customUserDir = val.replace('--user-data-dir=', '').trim();
+      const customUserDir = val
+        .replace('--user-data-dir=', '')
+        .trim()
+        .replace(/[\/\\]+$/, ''); // Remove trailing slashes
       log('Using custom directory for user data', customUserDir);
       app.setPath('userData', customUserDir);
       wasUserDataDirSet = true;
@@ -104,6 +153,49 @@ export const startApp = (): void => {
     app.setAppLogsPath();
   }
 
+  if (process.platform === 'linux') {
+    // Preserve the historical userData path based on package.json `name`, while
+    // exposing a human-readable app name to Linux desktop environments.
+    const userDataPath = app.getPath('userData');
+    app.setPath('userData', userDataPath);
+    app.setName(APP_DISPLAY_NAME);
+  }
+
+  // Defense-in-depth against GPU init failures on confined Linux packages
+  // (Snap Mesa ABI drift, missing DRI nodes under Flatpak, etc.) where the
+  // main process stays alive but the GPU process crashes at init and the
+  // window never renders. `--disable-gpu` avoids the hardware Mesa DRI
+  // driver load path — which is the ABI-drift source on confined Snap.
+  // Note: `--disable-gpu` does NOT guarantee "no GPU process" on Linux
+  // (Chromium may still run a GPU process in SwiftShader or
+  // DisplayCompositor mode), but those modes don't dlopen Mesa DRI
+  // drivers, which is what matters for this bug. `--disable-software-
+  // rasterizer` is added as belt-and-braces; the combined pair is what
+  // Chromium's own GPU integration tests treat as "no GPU process."
+  // `app.disableHardwareAcceleration()` only disables compositor accel
+  // and leaves the failing GPU-process-init path active.
+  //
+  // `--ozone-platform=x11` is also stacked: on Chromium 140+/Electron 38+
+  // the Wayland auto-detection can dlopen libgbm in browser-side init
+  // before the GPU-process gate, so the flag pair alone is a false
+  // negative on Flatpak+Wayland hosts. On Snap this is redundant with
+  // the X11 widening block above, but appending twice is harmless (last
+  // value wins in Chromium argv parsing).
+  //
+  // IMPORTANT: must stay after every `app.setPath('userData', ...)` call
+  // above — the marker lives in userData.
+  const gpuDecision = evaluateGpuStartupGuard(app.getPath('userData'));
+  if (gpuDecision.disableGpu) {
+    app.commandLine.appendSwitch('disable-gpu');
+    app.commandLine.appendSwitch('disable-software-rasterizer');
+    app.commandLine.appendSwitch('ozone-platform', 'x11');
+    log(
+      `Disabling GPU acceleration (reason: ${gpuDecision.reason}). ` +
+        `Set SP_ENABLE_GPU=1 to force-enable on the next launch` +
+        (gpuDecision.markerPath ? ` or delete ${gpuDecision.markerPath}.` : '.'),
+    );
+  }
+
   initDebug({ showDevTools: isShowDevTools }, IS_DEV);
 
   // NOTE: opening the folder crashes the mas build
@@ -118,16 +210,75 @@ export const startApp = (): void => {
     });
   }
 
-  // Allow invalid certificates for jira requests
+  // Allow invalid certificates for self-hosted services (Jira, GitLab, Redmine, etc.)
+  // WARNING: This bypasses certificate validation for ALL URLs. Many users rely on
+  // self-signed certificates for their self-hosted integrations, so removing this
+  // would be a breaking change. The trade-off is reduced TLS security in exchange
+  // for compatibility with self-hosted servers.
   appIN.on('certificate-error', (event, webContents, url, err, certificate, callback) => {
-    log(err);
+    warn(`Certificate error for ${url}: ${err}`);
     event.preventDefault();
     callback(true);
   });
 
   // APP EVENT LISTENERS
   // -------------------
-  appIN.on('ready', createMainWin);
+
+  // Force "regular" activation policy + show the dock icon when running
+  // under the screenshot pipeline. Playwright's `_electron.launch` spawns
+  // Electron as a child of node, and macOS doesn't always promote child-
+  // spawned Electron processes to a full GUI app — the result is a window
+  // with no traffic-lights despite `titleBarStyle: 'hiddenInset'`. The
+  // installed SP build doesn't hit this because it's launched as an .app
+  // bundle. Gating on `SP_SCREENSHOT_MODE=1` so normal users are unaffected.
+  if (IS_MAC && process.env.SP_SCREENSHOT_MODE === '1') {
+    appIN.on('ready', () => {
+      try {
+        appIN.setActivationPolicy?.('regular');
+      } catch {
+        /* setActivationPolicy is macOS-only — guarded above, but swallow */
+      }
+      try {
+        appIN.dock?.show();
+      } catch {
+        /* dock.show is macOS-only — guarded above, but swallow */
+      }
+    });
+  }
+
+  appIN.on('ready', () => {
+    // Clear GPU cache when Electron version changes to prevent blank/black screens.
+    // Stale GPU shader caches from old Electron versions cause rendering failures.
+    // Pattern used by Obsidian's Flatpak wrapper.
+    if (process.platform === 'linux') {
+      const userDataPath = app.getPath('userData');
+      const versionFile = join(userDataPath, '.electron-version');
+      const currentVersion = process.versions.electron;
+      try {
+        let lastVersion = '';
+        try {
+          lastVersion = fs.readFileSync(versionFile, 'utf8').trim();
+        } catch {
+          // File doesn't exist on first run
+        }
+        if (lastVersion !== currentVersion) {
+          const gpuCachePath = join(userDataPath, 'GPUCache');
+          if (fs.existsSync(gpuCachePath)) {
+            fs.rmSync(gpuCachePath, { recursive: true, force: true });
+            log(
+              `Cleared GPUCache after Electron upgrade (${lastVersion} -> ${currentVersion})`,
+            );
+          }
+          fs.mkdirSync(userDataPath, { recursive: true });
+          fs.writeFileSync(versionFile, currentVersion);
+        }
+      } catch (e) {
+        log('Failed to check/clear GPU cache:', e);
+      }
+    }
+  });
+
+  appIN.on('ready', () => createMainWin());
   appIN.on('ready', () => initBackupAdapter());
   appIN.on('ready', () => initLocalFileSyncAdapter());
   appIN.on('ready', () => initFullScreenBlocker(IS_DEV));
@@ -147,68 +298,168 @@ export const startApp = (): void => {
   });
 
   appIN.on('ready', () => {
+    // Initialize idle time handler
+    idleTimeHandler = new IdleTimeHandler();
+
     let suspendStart: number;
-    const sendIdleMsgIfOverMin = (idleTime: number): void => {
+    // Prevent overlapping async idle checks.
+    // lazySetInterval schedules the next tick regardless of whether the previous
+    // check finished. Our idle detection on Wayland may spawn external commands
+    // (gdbus/dbus-send/xprintidle/loginctl) which can take close to or longer than
+    // the poll interval. Without this guard, multiple checks can run concurrently,
+    // causing timeouts and subsequent 0ms readings, which looks like "only one
+    // idle event was ever sent". This ensures at most one check runs at a time.
+    let isCheckingIdle = false;
+    const sendIdleMsgIfOverMin = (
+      idleTime: number,
+    ): { sent: boolean; reason?: string } => {
       // sometimes when starting a second instance we get here although we don't want to
       if (!mainWin) {
         info(
           'special case occurred when trackTimeFn is called even though, this is a second instance of the app',
         );
-        return;
+        return { sent: false, reason: 'no-window' };
       }
 
-      // don't update if the user is about to close
-      if (!appIN.isQuiting && idleTime > CONFIG.MIN_IDLE_TIME) {
-        mainWin.webContents.send(IPC.IDLE_TIME, idleTime);
+      if (getIsQuiting()) {
+        return { sent: false, reason: 'quitting' };
       }
+
+      if (idleTime <= CONFIG.MIN_IDLE_TIME) {
+        return { sent: false, reason: 'below-threshold' };
+      }
+
+      mainWin.webContents.send(IPC.IDLE_TIME, idleTime);
+      return { sent: true };
     };
 
-    const checkIdle = (): void =>
-      sendIdleMsgIfOverMin(powerMonitor.getSystemIdleTime() * 1000);
-
+    // --------IDLE HANDLING---------
+    let consecutiveFailures = 0;
     // init time tracking interval
-    lazySetInterval(checkIdle, CONFIG.IDLE_PING_INTERVAL);
+    log(
+      `🚀 Starting idle time tracking (interval: ${CONFIG.IDLE_PING_INTERVAL}ms, threshold: ${CONFIG.MIN_IDLE_TIME}ms)`,
+    );
+    const stopIdleChecks: () => void = lazySetInterval(async (): Promise<void> => {
+      // Skip if a previous check is still in flight
+      if (isCheckingIdle) {
+        return;
+      }
+      isCheckingIdle = true;
+      const startTime = Date.now();
+      try {
+        const idleTime = await idleTimeHandler.getIdleTime();
+        const checkDuration = Date.now() - startTime;
+
+        consecutiveFailures = 0;
+        const sendResult = sendIdleMsgIfOverMin(idleTime);
+        const actionSummary = sendResult.sent
+          ? 'sent'
+          : `skipped:${sendResult.reason ?? 'unknown'}`;
+        const logParts = [
+          `idle=${idleTime}ms`,
+          `method=${idleTimeHandler.currentMethod}`,
+          `duration=${checkDuration}ms`,
+          `threshold=${CONFIG.MIN_IDLE_TIME}ms`,
+          `action=${actionSummary}`,
+        ];
+        electronLog.debug(`🕘 Idle check (${logParts.join(', ')})`);
+      } catch (error) {
+        consecutiveFailures += 1;
+        log('💥 Error getting idle time, falling back to powerMonitor:', error);
+        if (consecutiveFailures >= 3) {
+          stopIdleChecks();
+        }
+      } finally {
+        isCheckingIdle = false;
+      }
+    }, CONFIG.IDLE_PING_INTERVAL);
+    // --------END IDLE HANDLING---------
+
+    // Track whether window was visible before suspend/lock so we only
+    // restore keyboard focus for windows that were actually in use.
+    // Using showOrFocus() unconditionally would surface hidden/minimized
+    // windows on every wake/unlock — a UX regression.
+    let wasVisibleBeforeSuspend = false;
 
     powerMonitor.on('suspend', () => {
-      appIN.isLocked = true;
+      log('powerMonitor: System suspend detected');
+      wasVisibleBeforeSuspend = mainWin.isVisible() && !mainWin.isMinimized();
+      setIsLocked(true);
       suspendStart = Date.now();
       mainWin.webContents.send(IPC.SUSPEND);
     });
 
     powerMonitor.on('lock-screen', () => {
-      appIN.isLocked = true;
+      log('powerMonitor: Screen lock detected');
+      wasVisibleBeforeSuspend = mainWin.isVisible() && !mainWin.isMinimized();
+      setIsLocked(true);
       suspendStart = Date.now();
       mainWin.webContents.send(IPC.SUSPEND);
     });
 
     powerMonitor.on('resume', () => {
-      appIN.isLocked = false;
-      sendIdleMsgIfOverMin(Date.now() - suspendStart);
+      const idleTime = Date.now() - suspendStart;
+      log(`powerMonitor: System resume detected. Idle time: ${idleTime}ms`);
+      setIsLocked(false);
+      sendIdleMsgIfOverMin(idleTime);
       mainWin.webContents.send(IPC.RESUME);
+      // Restore keyboard focus only if window was visible before suspend (electron#20464)
+      if (wasVisibleBeforeSuspend) {
+        showOrFocus(mainWin);
+      }
     });
 
     powerMonitor.on('unlock-screen', () => {
-      appIN.isLocked = false;
-      sendIdleMsgIfOverMin(Date.now() - suspendStart);
+      const idleTime = Date.now() - suspendStart;
+      log(`powerMonitor: Screen unlock detected. Idle time: ${idleTime}ms`);
+      setIsLocked(false);
+      sendIdleMsgIfOverMin(idleTime);
       mainWin.webContents.send(IPC.RESUME);
-    });
-
-    protocol.registerFileProtocol('file', (request, callback) => {
-      const pathname = decodeURI(request.url.replace('file:///', ''));
-      callback(pathname);
+      // Restore keyboard focus only if window was visible before lock (electron#20464)
+      if (wasVisibleBeforeSuspend) {
+        showOrFocus(mainWin);
+      }
     });
   });
 
   appIN.on('will-quit', () => {
     // un-register all shortcuts.
     globalShortcut.unregisterAll();
+    // Safe to remove IPC listeners here: all windows are closed and before-close
+    // IPC flows (sync, finish-day) are guaranteed to have completed.
+    ipcMain.removeAllListeners();
+  });
+
+  appIN.on('before-quit', (event) => {
+    log('App before-quit: isQuiting=', getIsQuiting());
+    if (!getIsQuiting()) {
+      // Native quit path (Cmd+Q, Dock > Quit on macOS): app.quit() was called
+      // by the OS without going through quitApp(), so isQuiting was never set.
+      // Prevent the immediate quit and delegate to the window close handler,
+      // which manages the before-close callback flow (sync, finish-day, etc.)
+      // and sets isQuiting=true before re-quitting.
+      event.preventDefault();
+      closeWinAndQuit(quitApp);
+      return;
+    }
+    // isQuiting=true: all before-close IPC work is complete — safe to clean up.
+    idleTimeHandler?.dispose();
+    destroyTaskWidget();
+    if (global.gc) {
+      global.gc();
+    }
   });
 
   appIN.on('window-all-closed', () => {
     log('Quit after all windows being closed');
-    // if (!IS_MAC) {
+    // Force quit the app
     app.quit();
-    // }
+
+    // If app doesn't quit within 2 seconds, force exit
+    setTimeout(() => {
+      log('Force exiting app as it did not quit properly');
+      app.exit(0);
+    }, 2000);
   });
   process.on('uncaughtException', (err) => {
     console.log(err);
@@ -250,14 +501,32 @@ export const startApp = (): void => {
   }
 
   // eslint-disable-next-line prefer-arrow/prefer-arrow-functions
-  function createMainWin(): void {
-    mainWin = createWindow({
+  async function createMainWin(): Promise<void> {
+    // Remove stale LevelDB LOCK files before the renderer opens IndexedDB.
+    // Orphaned locks from unclean session shutdowns block the backing store open.
+    await clearStaleLevelDbLocks(app.getPath('userData'));
+
+    mainWin = await createWindow({
       app,
       IS_DEV,
       ICONS_FOLDER,
       quitApp,
       customUrl,
     });
+
+    initPluginOAuth(mainWin);
+
+    // Process pending protocol URLs once the renderer has fully booted
+    // (signaled via IPC.APP_READY, which Angular init fires) rather than
+    // guessing with a fixed timer — cold-start boot time varies with
+    // machine load and OS disk caching, and a URL delivered before the
+    // renderer subscribes would otherwise race app startup.
+    const win = mainWin;
+    if (getIsAppReady()) {
+      processPendingProtocolUrls(win);
+    } else {
+      ipcMain.once(IPC.APP_READY, () => processPendingProtocolUrls(win));
+    }
   }
 
   // eslint-disable-next-line prefer-arrow/prefer-arrow-functions

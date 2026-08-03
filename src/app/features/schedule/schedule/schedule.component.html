@@ -1,202 +1,163 @@
-<!--  <div class="title">February 2019 Week 6</div>-->
-
-<header>
-  <!--  <div class="main-controls">-->
-  <!--    <button-->
-  <!--      mat-icon-button-->
-  <!--      [disabled]="true"-->
-  <!--    >-->
-  <!--      <mat-icon>chevron_left</mat-icon>-->
-  <!--    </button>-->
-  <!--    <div-->
-  <!--      *ngIf="currentTimeSpan$|async as currentTimeSpan"-->
-  <!--      style="margin-right: 16px"-->
-  <!--    >-->
-  <!--      {{currentTimeSpan.from}} - {{currentTimeSpan.to}}-->
-  <!--    </div>-->
-  <!--    <button mat-icon-button>-->
-  <!--      <mat-icon>chevron_right</mat-icon>-->
-  <!--    </button>-->
-
-  <!--    <div><strong>~</strong>Flow source:</div>-->
-  <!--    <div><strong>~</strong></div>-->
-  <!--    <div><mat-icon>airwave</mat-icon> Flow from:</div>-->
-  <!--    <button-->
-  <!--      mat-button-->
-  <!--      [matMenuTriggerFor]="menu"-->
-  <!--    >-->
-  <!--      <mat-icon>wb_sunny</mat-icon>-->
-  <!--      Today-->
-  <!--    </button>-->
-  <!--    <mat-menu #menu="matMenu">-->
-  <!--      <button mat-menu-item>Only show appointments</button>-->
-  <!--      <button mat-menu-item>Show tasks from X</button>-->
-  <!--    </mat-menu>-->
-  <!--  </div>-->
-
-  <div class="days">
-    <div class="filler"><!--for time --></div>
-
-    @for (day of daysToShow; track $index) {
-      <div class="day">
-        @if ($index === 0) {
-          <mat-icon>wb_sunny</mat-icon>
-        }
-        <div class="day-num">{{ day | date: 'd' }}</div>
-        <div class="day-day">{{ day | date: 'EEE' }}</div>
-      </div>
-    }
+<div class="schedule-nav-controls">
+  <div class="time-view-selector">
+    <button
+      mat-icon-button
+      class="time-view-btn e2e-day-view-btn"
+      [class.active]="isDayView()"
+      [attr.aria-pressed]="isDayView()"
+      (click)="selectTimeView('day')"
+      [matTooltip]="T.F.SCHEDULE.VIEW_DAY | translate"
+      [attr.aria-label]="T.F.SCHEDULE.VIEW_DAY | translate"
+    >
+      <mat-icon>calendar_view_day</mat-icon>
+    </button>
+    <button
+      mat-icon-button
+      class="time-view-btn"
+      [class.active]="isWeekView()"
+      [attr.aria-pressed]="isWeekView()"
+      (click)="selectTimeView('week')"
+      [matTooltip]="T.F.SCHEDULE.VIEW_WEEK | translate"
+      [attr.aria-label]="T.F.SCHEDULE.VIEW_WEEK | translate"
+    >
+      <mat-icon>view_week</mat-icon>
+    </button>
+    <button
+      mat-icon-button
+      class="time-view-btn"
+      [class.active]="isMonthView()"
+      [attr.aria-pressed]="isMonthView()"
+      (click)="selectTimeView('month')"
+      [matTooltip]="T.F.SCHEDULE.VIEW_MONTH | translate"
+      [attr.aria-label]="T.F.SCHEDULE.VIEW_MONTH | translate"
+    >
+      <mat-icon>calendar_month</mat-icon>
+    </button>
   </div>
-</header>
 
-<!--<div class="outer-container">-->
-<div
-  #gridContainer
-  class="main-grid-container {{ containerExtraClass }}"
-  [class.isCtrlKeyPressed]="shortcutService.isCtrlPressed$ | async"
-  (click)="onGridClick($event)"
-  (mousemove)="onMoveOverGrid($event)"
->
-  <!-- Time -->
-  @for (time of times; track $index) {
-    <div
-      class="time"
-      style="grid-row: {{ $index * FH + 1 }}"
+  @if (showCalFilterBtn()) {
+    <button
+      mat-icon-button
+      [matMenuTriggerFor]="calFilterMenu"
+      [matTooltip]="T.F.SCHEDULE.CALENDAR_VISIBILITY | translate"
+      [attr.aria-label]="T.F.SCHEDULE.CALENDAR_VISIBILITY | translate"
     >
-      {{ time }}
-    </div>
-  }
-  <!-- Grid Rows -->
-  @for (row of rowsByNr; track $index) {
-    <div
-      class="row"
-      style="grid-row: {{ row + 1 }}"
-    ></div>
-  }
-
-  <!-- Grid Cols -->
-  @for (day of daysToShow; track $index) {
-    <div
-      class="col"
-      [attr.data-day]="day"
-      style="grid-column: {{ $index + 2 }}; grid-row: 1 / span {{
-        ($index === 0 ? currentTimeRow : endOfDayColRowStart) - 1
-      }}"
-    >
-      <div class="drop-label">{{ T.F.SCHEDULE.PLAN_START_DAY | translate }}</div>
-    </div>
-    <div
-      class="col end-of-day"
-      [attr.data-day]="day"
-      style="grid-column: {{ $index + 2 }}; grid-row: {{
-        $index === 0 ? currentTimeRow : endOfDayColRowStart
-      }} / span {{ totalRows - ($index === 0 ? currentTimeRow : endOfDayColRowStart) }}"
-    >
-      <div class="drop-label">{{ T.F.SCHEDULE.PLAN_END_DAY | translate }}</div>
-    </div>
-  }
-
-  <!-- Work Start and End -->
-  @if (workStartEnd) {
-    <div
-      class="work-start"
-      style="grid-row: {{ workStartEnd.workStartRow }}"
-    >
-      <div>{{ T.F.SCHEDULE.START | translate }}</div>
-    </div>
-    <div
-      class="work-end"
-      style="grid-row: {{ workStartEnd.workEndRow }}"
-    >
-      <div>{{ T.F.SCHEDULE.END | translate }}</div>
-    </div>
-  }
-
-  <!-- Events -->
-  @for (ev of events$ | async; track ev.id) {
-    <!-- -->
-    @if (
-      ev.type === SVEType.Task ||
-      ev.type === SVEType.SplitTask ||
-      ev.type === SVEType.TaskPlannedForDay ||
-      ev.type === SVEType.SplitTaskPlannedForDay
-    ) {
-      <schedule-event
-        class="draggable"
-        cdkDrag
-        [cdkDragData]="ev"
-        (cdkDragMoved)="dragMoved($event)"
-        (cdkDragStarted)="dragStarted($event)"
-        (cdkDragReleased)="dragReleased($event)"
-        [cdkDragStartDelay]="IS_TOUCH_PRIMARY ? 75 : 0"
-        [event]="ev"
-      ></schedule-event>
-    } @else {
-      <schedule-event [event]="ev"></schedule-event>
-    }
-  }
-
-  <!-- Excess tasks planned for day -->
-  @for (beyondBudgetDay of beyondBudget$ | async; track i; let i = $index) {
-    <!-- -->
-    @if (beyondBudgetDay.length > 0) {
-      <div
-        class="excess-entries"
-        style="grid-column: {{ i + 2 }}"
-      >
-        <div
-          class="excess-entries-header"
-          [matTooltipPosition]="'above'"
-          [matTooltip]="
-            'Tasks planned for day, but that are beyond the available time budget'
-          "
-        >
-          <mat-icon>hourglass_disabled</mat-icon>
-          {{ beyondBudgetDay.length }}
+      <mat-icon>event_note</mat-icon>
+    </button>
+    <mat-menu #calFilterMenu="matMenu">
+      <ng-template matMenuContent>
+        <div (click)="$event.stopPropagation()">
+          @for (provider of enabledCalendarProviders(); track provider.id) {
+            <button
+              mat-menu-item
+              role="menuitemcheckbox"
+              [attr.aria-checked]="!hiddenCalendarProviderIds().includes(provider.id)"
+              (click)="toggleCalProvider(provider.id)"
+            >
+              @if (hiddenCalendarProviderIds().includes(provider.id)) {
+                <mat-icon>check_box_outline_blank</mat-icon>
+              } @else {
+                <mat-icon>check_box</mat-icon>
+              }
+              @if (provider.color) {
+                <span
+                  class="cal-color-dot"
+                  [style.background]="provider.color"
+                ></span>
+              }
+              {{ calProviderLabel(provider) }}
+            </button>
+          }
         </div>
-        @for (ev of beyondBudgetDay; track ev.id) {
-          <schedule-event
-            [event]="ev"
-            class="draggable"
-            cdkDrag
-            [cdkDragData]="ev"
-            (cdkDragMoved)="dragMoved($event)"
-            (cdkDragStarted)="dragStarted($event)"
-            (cdkDragReleased)="dragReleased($event)"
-            [cdkDragStartDelay]="IS_TOUCH_PRIMARY ? DRAG_DELAY_FOR_TOUCH : 0"
-          ></schedule-event>
-        }
-      </div>
-    }
-    <!-- -->
+      </ng-template>
+    </mat-menu>
   }
 
-  <div
-    class="current-time"
-    style="grid-column: 2;  grid-row: {{ currentTimeRow }} / span 1"
-  >
-    <div class="circle"></div>
+  <div class="date-nav-group">
+    <button
+      mat-icon-button
+      (click)="goToPreviousPeriod()"
+      [disabled]="isViewingToday()"
+      [attr.aria-label]="
+        (isMonthView()
+          ? T.F.SCHEDULE.PREVIOUS_MONTH
+          : isDayView()
+            ? T.F.SCHEDULE.PREVIOUS_DAY
+            : T.F.SCHEDULE.PREVIOUS_WEEK
+        ) | translate
+      "
+      [matTooltip]="
+        (isMonthView()
+          ? T.F.SCHEDULE.PREVIOUS_MONTH
+          : isDayView()
+            ? T.F.SCHEDULE.PREVIOUS_DAY
+            : T.F.SCHEDULE.PREVIOUS_WEEK
+        ) | translate
+      "
+    >
+      <mat-icon>chevron_left</mat-icon>
+    </button>
+
+    <button
+      mat-icon-button
+      class="today-btn"
+      (click)="goToToday()"
+      [disabled]="isViewingToday()"
+      [attr.aria-label]="T.G.TODAY_TAG_TITLE | translate"
+      [matTooltip]="T.G.TODAY_TAG_TITLE | translate"
+    >
+      <mat-icon>wb_sunny</mat-icon>
+    </button>
+
+    <button
+      mat-icon-button
+      (click)="goToNextPeriod()"
+      [attr.aria-label]="
+        (isMonthView()
+          ? T.F.SCHEDULE.NEXT_MONTH
+          : isDayView()
+            ? T.F.SCHEDULE.NEXT_DAY
+            : T.F.SCHEDULE.NEXT_WEEK
+        ) | translate
+      "
+      [matTooltip]="
+        (isMonthView()
+          ? T.F.SCHEDULE.NEXT_MONTH
+          : isDayView()
+            ? T.F.SCHEDULE.NEXT_DAY
+            : T.F.SCHEDULE.NEXT_WEEK
+        ) | translate
+      "
+    >
+      <mat-icon>chevron_right</mat-icon>
+    </button>
   </div>
 
-  @if (newTaskPlaceholder$ | async; as newTaskPlaceholder) {
-    <create-task-placeholder
-      [isEditMode]="isCreateTaskActive"
-      [time]="newTaskPlaceholder.time"
-      [date]="newTaskPlaceholder.date"
-      (editEnd)="isCreateTaskActive = false; this.newTaskPlaceholder$.next(null)"
-      [style]="newTaskPlaceholder.style"
-    >
-    </create-task-placeholder>
-  }
+  <div class="title">{{ headerTitle() }}</div>
 </div>
-<!--</div>-->
 
-<div class="fab-wrapper show-xs-only FAB-BTN">
-  <button
-    mat-fab
-    color="primary"
-    (click)="layoutService.showAddTaskBar()"
-  >
-    <mat-icon>add</mat-icon>
-  </button>
+<div
+  class="scroll-wrapper"
+  [attr.data-horizontal-scroll]="shouldEnableHorizontalScroll() || null"
+  (scroll)="onScrollWrapperScroll($event)"
+>
+  @if (isMonthView()) {
+    <schedule-month
+      [events]="monthEvents()"
+      [daysToShow]="daysToShow()"
+      [weeksToShow]="weeksToShow()"
+      [firstDayOfWeek]="firstDayOfWeek()"
+    ></schedule-month>
+  } @else {
+    <schedule-week
+      [events]="events()"
+      [beyondBudget]="beyondBudget()"
+      [daysToShow]="daysToShow()"
+      [workStartEnd]="workStartEnd() || null"
+      [currentTimeRow]="currentTimeRow()"
+      [todayDateStr]="_todayDateStr()"
+      [isHorizontalScrollMode]="shouldEnableHorizontalScroll()"
+      [isHScrolled]="isHScrolled()"
+    ></schedule-week>
+  }
 </div>

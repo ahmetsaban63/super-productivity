@@ -2,6 +2,7 @@
   (click)="!data.actionStr && close()"
   [class.error]="data.type === 'ERROR'"
   [class.success]="data.type === 'SUCCESS'"
+  [class.warning]="data.type === 'WARNING'"
   class="wrapper"
 >
   @if (!data.ico) {
@@ -10,6 +11,9 @@
     }
     @if (data.type === 'ERROR') {
       <mat-icon class="snack-icon">error </mat-icon>
+    }
+    @if (data.type === 'WARNING') {
+      <mat-icon class="snack-icon">warning </mat-icon>
     }
   }
   @if (data.ico) {
@@ -28,26 +32,33 @@
   ></span>
 
   <div class="button-wrapper">
-    @if (data.actionStr) {
-      <button
-        (click)="actionClick()"
-        class="action"
-        color="accent"
-        mat-button
-      >
-        {{ data.actionStr | translate }}
-      </button>
-    }
+    <div class="button-wrapper-inner">
+      @if (data.actionStr) {
+        <button
+          (click)="actionClick()"
+          class="action"
+          color="accent"
+          mat-button
+        >
+          {{ data.actionStr | translate }}
+        </button>
+      }
+    </div>
   </div>
 
-  @if (!data.actionStr) {
+  @if (data.type === 'ERROR' || data.type === 'WARNING') {
     <button
-      class="close-btn"
+      (click)="close($event)"
+      [attr.aria-label]="T.G.DISMISS | translate"
+      [matTooltip]="T.G.DISMISS | translate"
+      class="close"
       mat-icon-button
+      type="button"
     >
       <mat-icon>close</mat-icon>
     </button>
   }
+
   @if (data.promise || data.showWhile$ || data.isSpinner) {
     <mat-progress-bar mode="indeterminate"></mat-progress-bar>
   }

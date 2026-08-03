@@ -5,6 +5,8 @@ import { standardListAnimation } from '../../../ui/animations/standard-list.ani'
 import { MatButton, MatMiniFabButton } from '@angular/material/button';
 import { MatIcon } from '@angular/material/icon';
 import { TranslatePipe } from '@ngx-translate/core';
+import { ContextMenuComponent } from '../../../ui/context-menu/context-menu.component';
+import { MatMenuItem } from '@angular/material/menu';
 
 @Component({
   selector: 'repeat-section-type',
@@ -12,7 +14,16 @@ import { TranslatePipe } from '@ngx-translate/core';
   styleUrls: ['./repeat-section-type.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
   animations: [standardListAnimation],
-  imports: [FormlyModule, MatMiniFabButton, MatIcon, MatButton, TranslatePipe],
+  imports: [
+    FormlyModule,
+    MatMiniFabButton,
+    MatIcon,
+    MatButton,
+    TranslatePipe,
+    ContextMenuComponent,
+    MatMenuItem,
+  ],
+  standalone: true,
 })
 export class RepeatSectionTypeComponent extends FieldArrayType {
   T: typeof T = T;
@@ -30,10 +41,32 @@ export class RepeatSectionTypeComponent extends FieldArrayType {
     const initialValue =
       this.field?.templateOptions?.defaultValue || (fn && fn(this.field));
 
-    super.add(undefined, initialValue);
+    // Formly's add() already clones, but clone() preserves observe() accessors
+    // on props.defaultValue. Rows now share storage and edits bleed (#8501).
+    // Spread materializes plain values one level deep. Fine for flat defaults.
+    const valueToAdd =
+      initialValue != null && typeof initialValue === 'object'
+        ? { ...initialValue }
+        : initialValue;
+
+    super.add(undefined, valueToAdd);
   }
 
   trackByFn(i: number, item: any): number | string {
     return item ? item.id : i;
+  }
+
+  moveItem(fromIndex: number, toIndex: number): void {
+    if (
+      this.model &&
+      fromIndex >= 0 &&
+      toIndex >= 0 &&
+      fromIndex < this.model.length &&
+      toIndex <= this.model.length
+    ) {
+      const m = this.model[fromIndex];
+      this.remove(fromIndex, { markAsDirty: true });
+      this.add(toIndex, m, { markAsDirty: true });
+    }
   }
 }

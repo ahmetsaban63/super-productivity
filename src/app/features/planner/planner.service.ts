@@ -1,150 +1,169 @@
-import { Injectable, inject } from '@angular/core';
-import { combineLatest, Observable, of } from 'rxjs';
-import {
-  distinctUntilChanged,
-  first,
-  map,
-  shareReplay,
-  switchMap,
-  tap,
-} from 'rxjs/operators';
-import { selectPlannedTasksById } from '../tasks/store/task.selectors';
+import { effect, inject, Injectable, signal } from '@angular/core';
+import { BehaviorSubject, combineLatest, Observable, of } from 'rxjs';
+import { first, map, shareReplay, switchMap, tap } from 'rxjs/operators';
+import { selectAllTasksWithDueTime } from '../tasks/store/task.selectors';
 import { Store } from '@ngrx/store';
 import { CalendarIntegrationService } from '../calendar-integration/calendar-integration.service';
 import { PlannerDay } from './planner.model';
-import {
-  selectAllDuePlannedDay,
-  selectAllDuePlannedOnDay,
-  selectPlannerDays,
-  selectTaskIdPlannedDayMap,
-} from './store/planner.selectors';
-import { ReminderService } from '../reminder/reminder.service';
-import { TaskPlanned } from '../tasks/task.model';
-import { selectAllTaskRepeatCfgs } from '../task-repeat-cfg/store/task-repeat-cfg.reducer';
+import { selectPlannerDays } from './store/planner.selectors';
+import { TaskWithDueTime } from '../tasks/task.model';
 import { DateService } from '../../core/date/date.service';
-import { fastArrayCompare } from '../../util/fast-array-compare';
 import { GlobalTrackingIntervalService } from '../../core/global-tracking-interval/global-tracking-interval.service';
 import { selectTodayTaskIds } from '../work-context/store/work-context.selectors';
-import { getWorklogStr } from '../../util/get-work-log-str';
-import { dateStrToUtcDate } from '../../util/date-str-to-utc-date';
 import { msToString } from '../../ui/duration/ms-to-string.pipe';
+import { getDbDateStr } from '../../util/get-db-date-str';
+import { parseDbDateStr } from '../../util/parse-db-date-str';
+import { getDiffInDays } from '../../util/get-diff-in-days';
+import { selectActiveTaskRepeatCfgs } from '../task-repeat-cfg/store/task-repeat-cfg.selectors';
+import { Log } from '../../core/log';
+import { LayoutService } from '../../core-ui/layout/layout.service';
 
 @Injectable({
   providedIn: 'root',
 })
 export class PlannerService {
+  private static readonly INITIAL_DAYS_DESKTOP = 15;
+  private static readonly INITIAL_DAYS_MOBILE = 5;
+  private static readonly AUTO_LOAD_INCREMENT = 7;
+
   private _store = inject(Store);
-  private _reminderService = inject(ReminderService);
   private _calendarIntegrationService = inject(CalendarIntegrationService);
   private _dateService = inject(DateService);
   private _globalTrackingIntervalService = inject(GlobalTrackingIntervalService);
+  private _layoutService = inject(LayoutService);
+
+  private _userHasScrolled = signal(false);
+
+  private _daysToShowCount$ = new BehaviorSubject<number>(
+    this._layoutService.isXs()
+      ? PlannerService.INITIAL_DAYS_MOBILE
+      : PlannerService.INITIAL_DAYS_DESKTOP,
+  );
+  public isLoadingMore$ = new BehaviorSubject<boolean>(false);
+  private _loadMoreTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
   includedWeekDays$ = of([0, 1, 2, 3, 4, 5, 6]);
 
-  daysToShow$ = this._globalTrackingIntervalService.todayDateStr$.pipe(
-    tap((val) => console.log('daysToShow$', val)),
-    switchMap(() => this.includedWeekDays$),
-    map((includedWeekDays) => {
-      const today = new Date().getTime();
-      const todayDayNr = new Date(today).getDay();
-      const nrOfDaysToShow = 15;
-      const daysToShow: string[] = [];
-      for (let i = 0; i < nrOfDaysToShow; i++) {
-        if (includedWeekDays.includes((i + todayDayNr) % 7)) {
-          // eslint-disable-next-line no-mixed-operators
-          daysToShow.push(this._dateService.todayStr(today + i * 24 * 60 * 60 * 1000));
-        }
+  constructor() {
+    // Reset to initial count when breakpoint changes, but only if user hasn't scrolled yet
+    effect(() => {
+      const isMobile = this._layoutService.isXs();
+
+      // Only reset to initial count if user hasn't manually scrolled yet
+      if (!this._userHasScrolled()) {
+        const newCount = isMobile
+          ? PlannerService.INITIAL_DAYS_MOBILE
+          : PlannerService.INITIAL_DAYS_DESKTOP;
+        this._daysToShowCount$.next(newCount);
       }
+    });
+  }
+
+  daysToShow$ = combineLatest([
+    this._daysToShowCount$,
+    this._globalTrackingIntervalService.todayDateStr$,
+    this.includedWeekDays$,
+  ]).pipe(
+    tap(([count, todayStr]) => Log.log('daysToShow$', { count, todayStr })),
+    map(([count, _, includedWeekDays]) => {
+      // Guard against empty includedWeekDays to prevent infinite loop
+      if (includedWeekDays.length === 0) {
+        return [];
+      }
+
+      // Anchor on the logical day, not the raw clock: between calendar
+      // midnight and the configured start-of-next-day the window must still
+      // begin at (logical) today, or the tasks planned for it have no rendered
+      // day at all; ensureDayLoaded below can only extend the window forward.
+      const cursor = this._dateService.getLogicalTodayDate();
+      // Only date parts are read below, so pin the cursor to midday first.
+      // setDate() preserves the wall time, and a late-evening one is normalised
+      // past midnight in zones whose spring-forward gap ends at 00:00
+      // (America/Godthab and America/Scoresbysund skip 23:00-23:59), which
+      // would drop a whole day from the window. Midday is never in a gap.
+      cursor.setHours(12, 0, 0, 0);
+      const daysToShow: string[] = [];
+
+      // Loop until we have the required count of days (not just iterate N
+      // times, which produces fewer days when weekends are excluded), stepping
+      // by calendar day: a DST transition day is 23h/25h long, so +24h ms
+      // arithmetic from a late-evening anchor skips or duplicates a date.
+      let daysAdded = 0;
+      while (daysAdded < count) {
+        if (includedWeekDays.includes(cursor.getDay())) {
+          daysToShow.push(this._dateService.todayStr(cursor));
+          daysAdded++;
+        }
+        cursor.setDate(cursor.getDate() + 1);
+      }
+
       return daysToShow;
     }),
   );
 
-  allScheduledTasks$: Observable<TaskPlanned[]> = this._reminderService.reminders$.pipe(
-    switchMap((reminders) => {
-      const tids = reminders
-        .filter((reminder) => reminder.type === 'TASK')
-        .map((reminder) => reminder.relatedId);
-      return this._store.select(selectPlannedTasksById, { ids: tids }) as Observable<
-        TaskPlanned[]
-      >;
-    }),
-    distinctUntilChanged(fastArrayCompare),
-  );
-
-  plannerDayForAllDueToday$: Observable<PlannerDay> = combineLatest([
-    this._store.select(selectAllTaskRepeatCfgs),
-    this._calendarIntegrationService.icalEvents$,
-    this.allScheduledTasks$,
-    this._globalTrackingIntervalService.todayDateStr$,
-  ]).pipe(
-    switchMap(([taskRepeatCfgs, icalEvents, allTasksPlanned, todayStr]) =>
-      this._store.select(
-        selectAllDuePlannedDay(taskRepeatCfgs, icalEvents, allTasksPlanned, todayStr),
-      ),
-    ),
-  );
-
-  plannerDayForAllDueTomorrow$: Observable<PlannerDay> = combineLatest([
-    this._store.select(selectAllTaskRepeatCfgs),
-    this._calendarIntegrationService.icalEvents$,
-    this.allScheduledTasks$,
-    this._globalTrackingIntervalService.todayDateStr$,
-  ]).pipe(
-    switchMap(([taskRepeatCfgs, icalEvents, allTasksPlanned, todayStr]) => {
-      const tomorrow = dateStrToUtcDate(todayStr);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const tomorrowStr = getWorklogStr(tomorrow);
-      return this._store.select(
-        selectAllDuePlannedOnDay(
-          taskRepeatCfgs,
-          icalEvents,
-          allTasksPlanned,
-          tomorrowStr,
-          todayStr,
-        ),
-      );
-    }),
+  allDueWithTimeTasks$: Observable<TaskWithDueTime[]> = this._store.select(
+    selectAllTasksWithDueTime,
   );
 
   // TODO this needs to be more performant
-  days$: Observable<PlannerDay[]> = this.daysToShow$.pipe(
-    switchMap((daysToShow) =>
-      combineLatest([
-        this._store.select(selectAllTaskRepeatCfgs),
-        this._store.select(selectTodayTaskIds),
-        this._calendarIntegrationService.icalEvents$,
-        this.allScheduledTasks$,
-        this._globalTrackingIntervalService.todayDateStr$,
-      ]).pipe(
-        switchMap(
-          ([taskRepeatCfgs, todayListTaskIds, icalEvents, allTasksPlanned, todayStr]) =>
-            this._store.select(
-              selectPlannerDays(
-                daysToShow,
-                taskRepeatCfgs,
-                todayListTaskIds,
-                icalEvents,
-                allTasksPlanned,
-                todayStr,
+  private _selectPlannerDaysFor$(
+    dayDates$: Observable<string[]>,
+  ): Observable<PlannerDay[]> {
+    return dayDates$.pipe(
+      switchMap((daysToShow) =>
+        combineLatest([
+          this._store.select(selectActiveTaskRepeatCfgs),
+          this._store.select(selectTodayTaskIds),
+          this._calendarIntegrationService.calendarEvents$,
+          this.allDueWithTimeTasks$,
+          this._globalTrackingIntervalService.todayDateStr$,
+        ]).pipe(
+          switchMap(
+            ([
+              taskRepeatCfgs,
+              todayListTaskIds,
+              calendarEvents,
+              allTasksPlanned,
+              todayStr,
+            ]) =>
+              this._store.select(
+                selectPlannerDays(
+                  daysToShow,
+                  taskRepeatCfgs,
+                  todayListTaskIds,
+                  calendarEvents,
+                  allTasksPlanned,
+                  todayStr,
+                ),
               ),
-            ),
+          ),
         ),
       ),
-    ),
+    );
+  }
+
+  days$: Observable<PlannerDay[]> = this._selectPlannerDaysFor$(this.daysToShow$).pipe(
     // for better performance
     // TODO better solution, gets called very often
-    // tap((val) => console.log('days$', val)),
-    // tap((val) => console.log('days$ SIs', val[0]?.scheduledIItems)),
-    shareReplay(1),
+    // tap((val) => Log.log('days$', val)),
+    // tap((val) => Log.log('days$ SIs', val[0]?.scheduledIItems)),
+    shareReplay({ bufferSize: 1, refCount: true }),
+  );
+  tomorrow$ = this.days$.pipe(
+    map((days) => {
+      const tomorrowStr = getDbDateStr(this._dateService.getLogicalTomorrowMs());
+      return days.find((d) => d.dayDate === tomorrowStr) ?? null;
+    }),
+    shareReplay({ bufferSize: 1, refCount: true }),
   );
 
-  plannedTaskDayMap$: Observable<{ [taskId: string]: string }> = this._store
-    .select(selectTaskIdPlannedDayMap)
-    // make this more performant by sharing stream
-    .pipe(shareReplay(1));
+  // plannedTaskDayMap$: Observable<{ [taskId: string]: string }> = this._store
+  //   .select(selectTaskIdPlannedDayMap)
+  //   // make this more performant by sharing stream
+  //   .pipe(shareReplay(1));
 
   getDayOnce$(dayStr: string): Observable<PlannerDay | undefined> {
-    return this.days$.pipe(
+    return this._selectPlannerDaysFor$(of([dayStr])).pipe(
       map((days) => days.find((d) => d.dayDate === dayStr)),
       first(),
     );
@@ -165,5 +184,41 @@ export class PlannerService {
         }),
       )
       .toPromise();
+  }
+
+  loadMoreDays(): void {
+    this.isLoadingMore$.next(true);
+    this._userHasScrolled.set(true);
+
+    // Yield to event loop to ensure loading state is visible
+    this._loadMoreTimeoutId = setTimeout(() => {
+      this._loadMoreTimeoutId = null;
+      const currentCount = this._daysToShowCount$.value;
+      this._daysToShowCount$.next(currentCount + PlannerService.AUTO_LOAD_INCREMENT);
+      this.isLoadingMore$.next(false);
+    }, 0);
+  }
+
+  ensureDayLoaded(dayDate: string): void {
+    const target = parseDbDateStr(dayDate);
+    const diff = getDiffInDays(this._dateService.getLogicalTodayDate(), target);
+    if (diff >= 0 && diff >= this._daysToShowCount$.value) {
+      this._userHasScrolled.set(true);
+      this._daysToShowCount$.next(diff + 3);
+    }
+  }
+
+  resetScrollState(): void {
+    if (this._loadMoreTimeoutId !== null) {
+      clearTimeout(this._loadMoreTimeoutId);
+      this._loadMoreTimeoutId = null;
+    }
+    this.isLoadingMore$.next(false);
+    this._userHasScrolled.set(false);
+    this._daysToShowCount$.next(
+      this._layoutService.isXs()
+        ? PlannerService.INITIAL_DAYS_MOBILE
+        : PlannerService.INITIAL_DAYS_DESKTOP,
+    );
   }
 }

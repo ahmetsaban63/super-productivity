@@ -1,5 +1,4 @@
 import {
-  Attribute,
   ChangeDetectionStrategy,
   Component,
   ElementRef,
@@ -8,6 +7,8 @@ import {
   OnDestroy,
   output,
   viewChild,
+  HostAttributeToken,
+  inject,
 } from '@angular/core';
 import { FormsModule, ReactiveFormsModule, UntypedFormControl } from '@angular/forms';
 import { Observable } from 'rxjs';
@@ -33,14 +34,16 @@ import { MatIconButton } from '@angular/material/button';
 import { MatOption } from '@angular/material/core';
 import { TranslatePipe } from '@ngx-translate/core';
 import { AsyncPipe } from '@angular/common';
+import { TagComponent } from '../../features/tag/tag/tag.component';
 
 const DEFAULT_SEPARATOR_KEY_CODES: number[] = [ENTER, COMMA];
 
+// Items render via <tag>, so non-tag callers get a colorless circle + title (graceful degradation).
 interface Suggestion {
   id: string;
   title: string;
 
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 @Component({
@@ -65,9 +68,12 @@ interface Suggestion {
     MatOption,
     TranslatePipe,
     AsyncPipe,
+    TagComponent,
   ],
 })
 export class ChipListInputComponent implements OnDestroy {
+  autoFocus = inject(new HostAttributeToken('autoFocus'), { optional: true });
+
   // TODO maybe use new api
   // autoFocus = inject(new HostAttributeToken('autoFocus'));
 
@@ -110,7 +116,9 @@ export class ChipListInputComponent implements OnDestroy {
 
   private _autoFocusTimeout?: number;
 
-  constructor(@Attribute('autoFocus') public autoFocus: Attribute) {
+  constructor() {
+    const autoFocus = this.autoFocus;
+
     if (typeof autoFocus === 'string') {
       this.isAutoFocus = true;
       this._autoFocusTimeout = window.setTimeout(() => {

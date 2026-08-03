@@ -1,13 +1,15 @@
-import moment from 'moment';
 import { msToClockString } from '../../../ui/duration/ms-to-clock-string.pipe';
 import { msToString } from '../../../ui/duration/ms-to-string.pipe';
+import { formatTimeHHmm } from '../../../util/format-time-hhmm';
 import { roundDuration } from '../../../util/round-duration';
 import { roundTime } from '../../../util/round-time';
 import { unique } from '../../../util/unique';
 import { ProjectCopy } from '../../project/project.model';
 import { TagCopy } from '../../tag/tag.model';
 import { WorklogTask } from '../../tasks/task.model';
+import { resolveDisplayTagIds } from '../../tasks/util/resolve-display-tag-ids.util';
 import { WorklogExportSettingsCopy, WorklogGrouping } from '../worklog.model';
+import { Log } from '../../../core/log';
 import {
   ItemsByKey,
   RowItem,
@@ -17,6 +19,10 @@ import {
 
 const LINE_SEPARATOR = '\n';
 const EMPTY_VAL = ' - ';
+const escapeCsvField = (value: string | number | undefined): string => {
+  const field = value === undefined ? '' : String(value);
+  return /[;"\r\n]/.test(field) ? `"${field.replace(/"/g, '""')}"` : field;
+};
 
 /**
  * Depending on groupBy it gets a map of RowItems by groupKeys (date, task.id, date_task.id).
@@ -47,7 +53,7 @@ export const createRows = (
       rows.push(groups[key]);
     });
 
-  return rows;
+  return groupBy === WorklogGrouping.WORKLOG ? clearRepeatedWorklogDayTimes(rows) : rows;
 };
 
 /**
@@ -60,7 +66,6 @@ const handleDateGroup = (data: WorklogExportData): ItemsByKey<RowItem> => {
     if (!task.timeSpentOnDay) {
       continue;
     }
-
     const taskFields = getTaskFields(task, data);
     const numDays = Object.keys(task.timeSpentOnDay).length;
     let timeEstimate = 0;
@@ -123,7 +128,7 @@ const handleDateGroup = (data: WorklogExportData): ItemsByKey<RowItem> => {
  */
 const skipTask = (task: WorklogTask, groupBy: WorklogGrouping): boolean => {
   return (
-    (groupBy === WorklogGrouping.PARENT && task.parentId !== null) ||
+    (groupBy === WorklogGrouping.PARENT && !!task.parentId) ||
     (groupBy === WorklogGrouping.TASK && task.subTaskIds.length > 0)
   );
 };
@@ -139,6 +144,9 @@ const handleTaskGroup = (
   const taskGroups: ItemsByKey<RowItem> = {};
   for (const task of data.tasks) {
     if (skipTask(task, groupBy)) {
+      continue;
+    }
+    if (!task.timeSpentOnDay) {
       continue;
     }
     const taskFields = getTaskFields(task, data);
@@ -162,6 +170,9 @@ const handleTaskGroup = (
 const handleWorklogGroup = (data: WorklogExportData): ItemsByKey<RowItem> => {
   const taskGroups: ItemsByKey<RowItem> = {};
   for (const task of data.tasks) {
+    if (!task.timeSpentOnDay) {
+      continue;
+    }
     Object.keys(task.timeSpentOnDay).forEach((day) => {
       const groupKey = day + '_' + task.id;
       const taskFields = getTaskFields(task, data);
@@ -178,16 +189,31 @@ const handleWorklogGroup = (data: WorklogExportData): ItemsByKey<RowItem> => {
   return taskGroups;
 };
 
+const clearRepeatedWorklogDayTimes = (rows: RowItem[]): RowItem[] => {
+  const seenDays = new Set<string>();
+  return rows.map((row) => {
+    const day = row.dates[0];
+    if (seenDays.has(day)) {
+      return {
+        ...row,
+        workStart: 0,
+        workEnd: 0,
+      };
+    }
+    seenDays.add(day);
+    return row;
+  });
+};
+
 /**
  * Unfolds task into taskFields while mapping id's to titles, and minor formatting
  */
 const getTaskFields = (task: WorklogTask, data: WorklogExportData): TaskFields => {
   const titlesWithSub = [task.title];
-  const parentTask =
-    task.parentId !== null
-      ? // NOTE: we use 'ERR' to still throw an error for invalid data
-        (data.tasks.find((t) => t.id === task.parentId) as WorklogTask) || 'ERR'
-      : undefined;
+  const parentTask = task.parentId
+    ? // NOTE: we use 'ERR' to still throw an error for invalid data
+      (data.tasks.find((t) => t.id === task.parentId) as WorklogTask) || 'ERR'
+    : undefined;
 
   const titles = parentTask ? [parentTask.title] : [task.title];
 
@@ -199,11 +225,10 @@ const getTaskFields = (task: WorklogTask, data: WorklogExportData): TaskFields =
       ]
     : [];
 
-  // by design subtasks don't have tags, so we must set its parent's tags
-  let tags = parentTask ? parentTask.tagIds : task.tagIds;
-  tags = tags.map(
-    (tagId) => (data.tags.find((tag) => tag.id === tagId) as TagCopy).title,
-  );
+  const tags = resolveDisplayTagIds(
+    task,
+    typeof parentTask === 'object' ? parentTask : undefined,
+  ).map((tagId) => (data.tags.find((tag) => tag.id === tagId) as TagCopy).title);
 
   const tasks = [task];
   return { tasks, titlesWithSub, titles, notes, projects, tags };
@@ -255,7 +280,7 @@ export const formatRows = (
           0,
         );
         const timeSpentPart = row.timeSpent / timeSpentTotal;
-        console.log(`${row.timeSpent} / ${timeSpentTotal} = ${timeSpentPart}`);
+        Log.log(`${row.timeSpent} / ${timeSpentTotal} = ${timeSpentPart}`);
         timeEstimate = timeEstimate * timeSpentPart;
       }
 
@@ -268,19 +293,19 @@ export const formatRows = (
         case 'START':
           const workStart = !row.workStart ? 0 : row.workStart;
           return workStart
-            ? moment(
+            ? formatTimeHHmm(
                 options.roundStartTimeTo
                   ? roundTime(workStart, options.roundStartTimeTo)
                   : workStart,
-              ).format('HH:mm')
+              )
             : EMPTY_VAL;
         case 'END':
           return row.workEnd
-            ? moment(
+            ? formatTimeHHmm(
                 options.roundEndTimeTo && row.workEnd
                   ? roundTime(row.workEnd, options.roundEndTimeTo)
                   : row.workEnd,
-              ).format('HH:mm')
+              )
             : EMPTY_VAL;
         case 'TITLES':
           return row.titles.join(options.separateTasksBy || '<br>');
@@ -325,7 +350,7 @@ export const formatText = (
   rows: (string | number | undefined)[][],
 ): string => {
   let txt = '';
-  txt += headlineCols.join(';') + LINE_SEPARATOR;
-  txt += rows.map((cols) => cols.join(';')).join(LINE_SEPARATOR);
+  txt += headlineCols.map(escapeCsvField).join(';') + LINE_SEPARATOR;
+  txt += rows.map((cols) => cols.map(escapeCsvField).join(';')).join(LINE_SEPARATOR);
   return txt;
 };

@@ -1,14 +1,4 @@
 import { SimpleCounter, SimpleCounterType } from './simple-counter.model';
-import { loadAllData } from '../../root-store/meta/load-all-data.action';
-import {
-  finishPomodoroSession,
-  pausePomodoro,
-  pausePomodoroBreak,
-  startPomodoro,
-  startPomodoroBreak,
-  stopPomodoro,
-} from '../pomodoro/store/pomodoro.actions';
-import { setCurrentTask, unsetCurrentTask } from '../tasks/store/task.actions';
 
 export const EMPTY_SIMPLE_COUNTER: SimpleCounter = {
   id: '',
@@ -24,6 +14,7 @@ export const EMPTY_SIMPLE_COUNTER: SimpleCounter = {
   isOn: false,
   isTrackStreaks: true,
   streakMinValue: 1,
+  streakMode: 'specific-days',
   // eslint-disable-next-line @typescript-eslint/naming-convention
   streakWeekDays: { 1: true, 2: true, 3: true, 4: true, 5: true, 6: false, 0: false },
 };
@@ -57,16 +48,4 @@ export const DEFAULT_SIMPLE_COUNTERS: SimpleCounter[] = [
     isTrackStreaks: true,
     streakMinValue: 8,
   },
-];
-
-export const SIMPLE_COUNTER_TRIGGER_ACTIONS: string[] = [
-  loadAllData.type,
-  setCurrentTask.type,
-  unsetCurrentTask.type,
-  startPomodoro.type,
-  pausePomodoro.type,
-  pausePomodoroBreak.type,
-  startPomodoroBreak.type,
-  stopPomodoro.type,
-  finishPomodoroSession.type,
 ];

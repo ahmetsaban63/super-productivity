@@ -1,16 +1,17 @@
 import { FileImexComponent } from '../../imex/file-imex/file-imex.component';
-import { SimpleCounterCfgComponent } from '../simple-counter/simple-counter-cfg/simple-counter-cfg.component';
 import { CustomCfgSection } from './global-config.model';
+import { ClipboardImagesCfgComponent } from './clipboard-images-cfg/clipboard-images-cfg.component';
+import { Type } from '@angular/core';
 
 export const customConfigFormSectionComponent = (
   customSection: CustomCfgSection,
-): unknown => {
+): Type<unknown> => {
   switch (customSection) {
     case 'FILE_IMPORT_EXPORT':
       return FileImexComponent;
 
-    case 'SIMPLE_COUNTER_CFG':
-      return SimpleCounterCfgComponent;
+    case 'CLIPBOARD_IMAGES_CFG':
+      return ClipboardImagesCfgComponent;
 
     default:
       throw new Error('Invalid component');

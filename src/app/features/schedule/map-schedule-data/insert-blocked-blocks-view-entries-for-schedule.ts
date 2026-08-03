@@ -6,7 +6,7 @@ import {
   SVESplitTaskContinued,
   SVESplitTaskStart,
 } from '../../schedule/schedule.model';
-import moment from 'moment/moment';
+import { formatDate } from '../../../util/format-date';
 import { TaskCopy, TaskWithoutReminder } from '../../tasks/task.model';
 import { SVEType } from '../../schedule/schedule.const';
 import { TaskRepeatCfg } from '../../task-repeat-cfg/task-repeat-cfg.model';
@@ -17,7 +17,7 @@ import {
 } from './is-schedule-types-type';
 import { createViewEntriesForBlock } from './create-view-entries-for-block';
 
-// const debug = (...args: any): void => console.log(...args);
+// const debug = (...args: any): void => Log.log(...args);
 const debug = (...args: any): void => undefined;
 
 export const insertBlockedBlocksViewEntriesForSchedule = (
@@ -54,13 +54,17 @@ export const insertBlockedBlocksViewEntriesForSchedule = (
       debug(
         {
           BIndex: blockIndex,
-          BStart: moment(blockedBlock.start).format('DD/MM H:mm'),
-          BEnd: moment(blockedBlock.end).format('DD/MM H:mm'),
+          BStart: formatDate(new Date(blockedBlock.start), 'DD/MM H:mm'),
+          BEnd: formatDate(new Date(blockedBlock.end), 'DD/MM H:mm'),
           BTypes: blockedBlock.entries.map((v) => v.type).join(', '),
           blockedBlock,
           viewEntriesToAddForBB,
         },
-        { veIndex, veStart: moment(viewEntry.start).format('DD/MM H:mm'), viewEntry },
+        {
+          veIndex,
+          veStart: formatDate(new Date(viewEntry.start), 'DD/MM H:mm'),
+          viewEntry,
+        },
         { viewEntriesLength: viewEntries.length },
         {
           viewEntries,
@@ -162,7 +166,10 @@ export const insertBlockedBlocksViewEntriesForSchedule = (
             });
 
             // move entries
-            // NOTE: needed because view entries might not be ordered at this point of time for some reason
+            // NOTE: Use time-based movement (not index-based) because earlier
+            // splice() operations can scatter split-continued entries
+            // non-contiguously in the array.  Time-based movement correctly
+            // shifts all affected entries regardless of their array position.
             const blockedBlockDuration = blockedBlock.end - blockedBlock.start;
             moveAllEntriesAfterTime(
               viewEntries,
@@ -204,6 +211,8 @@ export const insertBlockedBlocksViewEntriesForSchedule = (
               taskRepeatCfg,
               duration: timePlannedForSplitContinued,
               splitIndex: 0,
+              sourceOccurrenceDate:
+                currentVE.sourceOccurrenceDate ?? currentVE.plannedForDay,
             });
 
             // move entries
@@ -251,10 +260,15 @@ export const insertBlockedBlocksViewEntriesForSchedule = (
               taskRepeatCfg: currentVE.data,
               duration: timePlannedForSplitRepeatCfgProjectionContinued,
               splitIndex,
+              sourceOccurrenceDate:
+                currentVE.sourceOccurrenceDate ?? currentVE.plannedForDay,
             });
 
             // move entries
-            // NOTE: needed because view entries might not be ordered at this point of time for some reason
+            // NOTE: Use time-based movement (not index-based) because earlier
+            // splice() operations can scatter split-continued entries
+            // non-contiguously in the array.  Time-based movement correctly
+            // shifts all affected entries regardless of their array position.
             const blockedBlockDuration = blockedBlock.end - blockedBlock.start;
             moveAllEntriesAfterTime(
               viewEntries,
@@ -304,8 +318,8 @@ const moveAllEntriesAfterTime = (
       debug(
         'MOVE_ENTRY2',
         viewEntry.data?.title,
-        moment(viewEntry.start).format('DD/MM H:mm'),
-        moment(viewEntry.start + moveBy).format('DD/MM H:mm'),
+        formatDate(new Date(viewEntry.start), 'DD/MM H:mm'),
+        formatDate(new Date(viewEntry.start + moveBy), 'DD/MM H:mm'),
       );
       viewEntry.start = viewEntry.start + moveBy;
     }
@@ -324,8 +338,8 @@ const moveEntries = (
         i,
         'MOVE_ENTRY',
         viewEntry.data?.title,
-        moment(viewEntry.start).format('DD/MM H:mm'),
-        moment(viewEntry.start + moveBy).format('DD/MM H:mm'),
+        formatDate(new Date(viewEntry.start), 'DD/MM H:mm'),
+        formatDate(new Date(viewEntry.start + moveBy), 'DD/MM H:mm'),
       );
       viewEntry.start = viewEntry.start + moveBy;
     }
@@ -360,12 +374,16 @@ export const createSplitRepeat = ({
   taskRepeatCfg,
   splitIndex,
   duration,
+  sourceOccurrenceDate,
 }: {
   start: number;
   dayDate: string;
   taskRepeatCfg: TaskRepeatCfg;
   splitIndex: number;
   duration: number;
+  // the day the occurrence belongs to, which is not dayDate once a segment has
+  // been pushed across midnight -- without it a tail resolves to its render day
+  sourceOccurrenceDate?: string;
 }): SVERepeatProjectionSplitContinued => {
   return {
     id: `${taskRepeatCfg.id}_${dayDate}_${splitIndex}`,
@@ -374,5 +392,7 @@ export const createSplitRepeat = ({
     duration: duration,
     splitIndex,
     data: taskRepeatCfg,
+    plannedForDay: dayDate,
+    ...(sourceOccurrenceDate ? { sourceOccurrenceDate } : {}),
   };
 };

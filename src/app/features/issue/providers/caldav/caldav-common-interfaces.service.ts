@@ -1,59 +1,106 @@
 import { Injectable, inject } from '@angular/core';
-import { Observable, of, timer } from 'rxjs';
-import { Task } from 'src/app/features/tasks/task.model';
-import { IssueServiceInterface } from '../../issue-service-interface';
-import { IssueProviderCaldav, SearchResultItem } from '../../issue.model';
-import { CaldavIssue, CaldavIssueReduced } from './caldav-issue/caldav-issue.model';
+import { firstValueFrom, Observable } from 'rxjs';
+import { first, map, tap } from 'rxjs/operators';
+import { IssueTask, Task } from 'src/app/features/tasks/task.model';
+import { BaseIssueProviderService } from '../../base/base-issue-provider.service';
+import { IssueData, SearchResultItem } from '../../issue.model';
+import { CaldavIssue, CaldavIssueReduced } from './caldav-issue.model';
 import { CaldavClientService } from './caldav-client.service';
+import { CaldavSyncAdapterService } from './caldav-sync-adapter.service';
 import { CaldavCfg } from './caldav.model';
-import { concatMap, first, map, switchMap } from 'rxjs/operators';
 import { truncate } from '../../../../util/truncate';
+import { getDbDateStr } from '../../../../util/get-db-date-str';
 import { isCaldavEnabled } from './is-caldav-enabled.util';
-import { CALDAV_INITIAL_POLL_DELAY, CALDAV_POLL_INTERVAL } from './caldav.const';
-import { IssueProviderService } from '../../issue-provider.service';
+import { CALDAV_POLL_INTERVAL } from './caldav.const';
 
 @Injectable({
   providedIn: 'root',
 })
-export class CaldavCommonInterfacesService implements IssueServiceInterface {
-  private readonly _issueProviderService = inject(IssueProviderService);
+export class CaldavCommonInterfacesService extends BaseIssueProviderService<CaldavCfg> {
   private readonly _caldavClientService = inject(CaldavClientService);
+  private readonly _caldavSyncAdapter = inject(CaldavSyncAdapterService);
 
-  private static _formatIssueTitleForSnack(title: string): string {
-    return truncate(title);
+  // Short-lived cache so that getNewIssuesToAddToBacklog and all getSubTasks
+  // calls within the same poll cycle share a single REPORT request instead of
+  // issuing one per parent task (N+1 problem).
+  // We cache the Promise (not the resolved data) so that concurrent callers
+  // that arrive before the first request resolves all share the same in-flight
+  // Promise instead of each starting their own REPORT.
+  private _openTasksCache = new Map<
+    string,
+    { taskPromise: Promise<CaldavIssue[]>; ts: number }
+  >();
+  private readonly _OPEN_TASKS_CACHE_TTL_MS = 60_000;
+  private _cachedCfg?: CaldavCfg;
+
+  readonly providerKey = 'CALDAV' as const;
+
+  get pollInterval(): number {
+    return this._cachedCfg?.pollIntervalMinutes
+      ? this._cachedCfg.pollIntervalMinutes * 60 * 1000
+      : CALDAV_POLL_INTERVAL;
   }
-
-  pollTimer$: Observable<number> = timer(CALDAV_INITIAL_POLL_DELAY, CALDAV_POLL_INTERVAL);
 
   isEnabled(cfg: CaldavCfg): boolean {
     return isCaldavEnabled(cfg);
   }
 
-  testConnection$(cfg: CaldavCfg): Observable<boolean> {
-    return this._caldavClientService.searchOpenTasks$('', cfg).pipe(
-      map((res) => Array.isArray(res)),
-      first(),
+  // Caches config for the pollInterval getter (mirrors NextcloudDeck).
+  protected override _getCfgOnce$(issueProviderId: string): Observable<CaldavCfg> {
+    return super._getCfgOnce$(issueProviderId).pipe(
+      tap((cfg) => {
+        this._cachedCfg = cfg;
+      }),
     );
   }
 
-  getAddTaskData(issueData: CaldavIssueReduced): Partial<Task> & { title: string } {
+  testConnection(cfg: CaldavCfg): Promise<boolean> {
+    return firstValueFrom(
+      this._caldavClientService.searchOpenTasks$('', cfg).pipe(
+        map((res) => Array.isArray(res)),
+        first(),
+      ),
+    ).then((result) => result ?? false);
+  }
+
+  issueLink(_issueId: string | number, _issueProviderId: string): Promise<string> {
+    return Promise.resolve('');
+  }
+
+  getAddTaskData(issueData: CaldavIssue): IssueTask {
+    // Map DTSTART: all-day → dueDay, timed → dueWithTime, absent → null (prevents "Today" default).
+    // Always null the counterpart field so type transitions clear stale values on update.
+    const startFields: Partial<IssueTask> =
+      issueData.start === undefined
+        ? { dueDay: null, dueWithTime: null }
+        : issueData.isAllDay
+          ? { dueDay: getDbDateStr(issueData.start), dueWithTime: null }
+          : { dueWithTime: issueData.start, dueDay: null };
+
+    // Map DUE → deadline fields (all-day → deadlineDay, timed → deadlineWithTime).
+    // Always null the counterpart field to clear stale values on type transitions.
+    const dueFields: Partial<IssueTask> =
+      issueData.due === undefined
+        ? {}
+        : issueData.isDueAllDay
+          ? { deadlineDay: getDbDateStr(issueData.due), deadlineWithTime: null }
+          : { deadlineWithTime: issueData.due, deadlineDay: null };
+
     return {
-      issueLastUpdated: issueData.etag_hash,
       title: issueData.summary,
+      issueLastUpdated: issueData.etag_hash,
+      notes: issueData.note,
+      related_to: issueData.related_to,
+      ...startFields,
+      ...dueFields,
+      issueLastSyncedValues: this._caldavSyncAdapter.extractSyncValues(
+        issueData as unknown as Record<string, unknown>,
+      ),
     };
   }
 
-  getById$(id: string | number, issueProviderId: string): Observable<CaldavIssue> {
-    return this._getCfgOnce$(issueProviderId).pipe(
-      concatMap((caldavCfg) => this._caldavClientService.getById$(id, caldavCfg)),
-    );
-  }
-
-  issueLink$(issueId: string | number, issueProviderId: string): Observable<string> {
-    return of('');
-  }
-
-  async getFreshDataForIssueTask(task: Task): Promise<{
+  // CalDAV uses etag-based comparison, not timestamp
+  override async getFreshDataForIssueTask(task: Task): Promise<{
     taskChanges: Partial<Task>;
     issue: CaldavIssue;
     issueTitle: string;
@@ -65,8 +112,10 @@ export class CaldavCommonInterfacesService implements IssueServiceInterface {
       throw new Error('No issueId');
     }
 
-    const cfg = await this._getCfgOnce$(task.issueProviderId).toPromise();
-    const issue = await this._caldavClientService.getById$(task.issueId, cfg).toPromise();
+    const cfg = await firstValueFrom(this._getCfgOnce$(task.issueProviderId));
+    const issue = await firstValueFrom(
+      this._caldavClientService.getById$(task.issueId, cfg),
+    );
 
     const wasUpdated = issue.etag_hash !== task.issueLastUpdated;
 
@@ -77,33 +126,29 @@ export class CaldavCommonInterfacesService implements IssueServiceInterface {
           issueWasUpdated: true,
         },
         issue,
-        issueTitle: CaldavCommonInterfacesService._formatIssueTitleForSnack(
-          issue.summary,
-        ),
+        issueTitle: truncate(issue.summary),
       };
     }
     return null;
   }
 
-  async getFreshDataForIssueTasks(
+  // Batch-fetches by IDs for efficiency
+  override async getFreshDataForIssueTasks(
     tasks: Task[],
   ): Promise<{ task: Task; taskChanges: Partial<Task>; issue: CaldavIssue }[]> {
-    // First sort the tasks by the issueId
-    // because the API returns it in a desc order by issue iid(issueId)
-    // so it makes the update check easier and faster
     const issueProviderId =
-      tasks && tasks[0].issueProviderId ? tasks[0].issueProviderId : 0;
+      tasks && tasks[0].issueProviderId ? tasks[0].issueProviderId : '';
     if (!issueProviderId) {
       throw new Error('No issueProviderId');
     }
 
-    const cfg = await this._getCfgOnce$(issueProviderId).toPromise();
-    const issues: CaldavIssue[] = await this._caldavClientService
-      .getByIds$(
+    const cfg = await firstValueFrom(this._getCfgOnce$(issueProviderId));
+    const issues: CaldavIssue[] = await firstValueFrom(
+      this._caldavClientService.getByIds$(
         tasks.map((t) => t.id),
         cfg,
-      )
-      .toPromise();
+      ),
+    );
     const issueMap = new Map(issues.map((item) => [item.id, item]));
 
     return tasks
@@ -125,28 +170,79 @@ export class CaldavCommonInterfacesService implements IssueServiceInterface {
       });
   }
 
-  searchIssues$(
-    searchTerm: string,
-    issueProviderId: string,
-  ): Observable<SearchResultItem[]> {
-    return this._getCfgOnce$(issueProviderId).pipe(
-      switchMap((caldavCfg) =>
-        this.isEnabled(caldavCfg)
-          ? this._caldavClientService.searchOpenTasks$(searchTerm, caldavCfg)
-          : of([]),
-      ),
-    );
-  }
-
   async getNewIssuesToAddToBacklog(
     issueProviderId: string,
     allExistingIssueIds: number[] | string[],
   ): Promise<CaldavIssueReduced[]> {
-    const cfg = await this._getCfgOnce$(issueProviderId).toPromise();
-    return await this._caldavClientService.getOpenTasks$(cfg).toPromise();
+    const cfg = await firstValueFrom(this._getCfgOnce$(issueProviderId));
+    const tasks = await this._getOpenTasksCached(issueProviderId, cfg);
+
+    if (cfg.isAddSubTasks) {
+      const existingIds = new Set(allExistingIssueIds as string[]);
+      // Exclude child tasks whose parent is NOT yet in SP: they will be fetched via
+      // getSubTasks() when the parent is imported, avoiding a concurrent-add race.
+      // Child tasks whose parent already exists in SP are kept so _tryAddSubTask()
+      // can attach them to the parent on this poll cycle.
+      return tasks.filter((t) => !t.related_to || existingIds.has(t.related_to));
+    }
+
+    return tasks;
   }
 
-  private _getCfgOnce$(issueProviderId: string): Observable<IssueProviderCaldav> {
-    return this._issueProviderService.getCfgOnce$(issueProviderId, 'CALDAV');
+  async getSubTasks(
+    issueId: string | number,
+    issueProviderId: string,
+  ): Promise<CaldavIssueReduced[]> {
+    const cfg = await firstValueFrom(this._getCfgOnce$(issueProviderId));
+
+    if (!cfg.isAddSubTasks) {
+      return [];
+    }
+
+    const parentId = issueId.toString();
+    const allTasks = await this._getOpenTasksCached(issueProviderId, cfg);
+    // Guard against self-referential VTODOs (RELATED-TO:<own-uid>) which would
+    // cause a task to be added as its own sub-task and corrupt the store.
+    return allTasks.filter((t) => t.related_to === parentId && t.id !== parentId);
+  }
+
+  // Non-async: Map.set runs synchronously so concurrent callers share the
+  // same in-flight Promise instead of each firing their own REPORT request.
+  private _getOpenTasksCached(
+    issueProviderId: string,
+    cfg: CaldavCfg,
+  ): Promise<CaldavIssue[]> {
+    const cached = this._openTasksCache.get(issueProviderId);
+    if (cached && Date.now() - cached.ts < this._OPEN_TASKS_CACHE_TTL_MS) {
+      return cached.taskPromise;
+    }
+    const taskPromise = firstValueFrom(this._caldavClientService.getOpenTasks$(cfg));
+    this._openTasksCache.set(issueProviderId, { taskPromise, ts: Date.now() });
+    return taskPromise;
+  }
+
+  protected _apiGetById$(
+    id: string | number,
+    cfg: CaldavCfg,
+  ): Observable<IssueData | null> {
+    return this._caldavClientService.getById$(id, cfg);
+  }
+
+  protected _apiSearchIssues$(
+    searchTerm: string,
+    cfg: CaldavCfg,
+  ): Observable<SearchResultItem[]> {
+    return this._caldavClientService.searchOpenTasks$(searchTerm, cfg);
+  }
+
+  protected _formatIssueTitleForSnack(issue: IssueData): string {
+    return truncate((issue as CaldavIssue).summary);
+  }
+
+  // CalDAV uses etag_hash (string) not a numeric timestamp.
+  // Safe: both getFreshDataForIssueTask and getFreshDataForIssueTasks are overridden,
+  // which are the only callers of _getIssueLastUpdated.
+  protected _getIssueLastUpdated(_issue: IssueData): number {
+    return 0;
   }
 }

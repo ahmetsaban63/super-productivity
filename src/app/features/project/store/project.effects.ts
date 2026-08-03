@@ -1,265 +1,57 @@
-import { Injectable, inject } from '@angular/core';
-import { Actions, createEffect, ofType } from '@ngrx/effects';
-import { select, Store } from '@ngrx/store';
-import { concatMap, filter, first, map, switchMap, take, tap } from 'rxjs/operators';
+import { inject, Injectable } from '@angular/core';
+import { createEffect, ofType } from '@ngrx/effects';
+import { LOCAL_ACTIONS } from '../../../util/local-actions.token';
+import { filter, map, tap } from 'rxjs/operators';
 import {
   addProject,
-  addProjects,
-  addToProjectBreakTime,
-  archiveProject,
-  deleteProject,
-  loadProjectRelatedDataSuccess,
   moveAllProjectBacklogTasksToRegularList,
-  moveProjectTaskDownInBacklogList,
-  moveProjectTaskInBacklogList,
-  moveProjectTaskToBacklogList,
-  moveProjectTaskToBacklogListAuto,
-  moveProjectTaskToBottomInBacklogList,
-  moveProjectTaskToRegularList,
-  moveProjectTaskToRegularListAuto,
-  moveProjectTaskToTopInBacklogList,
-  moveProjectTaskUpInBacklogList,
-  unarchiveProject,
   updateProject,
-  updateProjectAdvancedCfg,
-  updateProjectOrder,
-  updateProjectWorkEnd,
-  updateProjectWorkStart,
-  upsertProject,
 } from './project.actions';
-import { PersistenceService } from '../../../core/persistence/persistence.service';
-import { BookmarkService } from '../../bookmark/bookmark.service';
+import { TaskSharedActions } from '../../../root-store/meta/task-shared.actions';
 import { SnackService } from '../../../core/snack/snack.service';
-import {
-  addTask,
-  addTimeSpent,
-  convertToMainTask,
-  deleteTask,
-  deleteTasks,
-  moveToArchive_,
-  moveToOtherProject,
-  restoreTask,
-} from '../../tasks/store/task.actions';
-import { ProjectService } from '../project.service';
 import { GlobalConfigService } from '../../config/global-config.service';
 import { T } from '../../../t.const';
-import {
-  moveTaskDownInTodayList,
-  moveTaskInTodayList,
-  moveTaskUpInTodayList,
-} from '../../work-context/store/work-context-meta.actions';
-import { WorkContextType } from '../../work-context/work-context.model';
-import { setActiveWorkContext } from '../../work-context/store/work-context.actions';
 import { Project } from '../project.model';
-import { Task, TaskArchive } from '../../tasks/task.model';
-import { unique } from '../../../util/unique';
-import { EMPTY, Observable, of } from 'rxjs';
-import { selectProjectFeatureState } from './project.selectors';
-import {
-  addNote,
-  deleteNote,
-  moveNoteToOtherProject,
-  updateNoteOrder,
-} from '../../note/store/note.actions';
-import { DateService } from 'src/app/core/date/date.service';
-import { ReminderService } from '../../reminder/reminder.service';
+import { INBOX_PROJECT } from '../project.const';
+import { Observable } from 'rxjs';
+import { LocalDraftService } from '../../../core/draft/local-draft.service';
 
 @Injectable()
 export class ProjectEffects {
-  private _actions$ = inject(Actions);
-  private _store$ = inject<Store<any>>(Store);
+  private _actions$ = inject(LOCAL_ACTIONS);
   private _snackService = inject(SnackService);
-  private _projectService = inject(ProjectService);
-  private _persistenceService = inject(PersistenceService);
-  private _bookmarkService = inject(BookmarkService);
   private _globalConfigService = inject(GlobalConfigService);
-  private _dateService = inject(DateService);
-  private _reminderService = inject(ReminderService);
+  private _localDraftService = inject(LocalDraftService);
 
-  syncProjectToLs$: Observable<unknown> = createEffect(
-    () =>
-      this._actions$.pipe(
-        ofType(
-          addProject.type,
-          addProjects.type,
-          upsertProject.type,
-          deleteProject.type,
-          updateProject.type,
-          updateProjectAdvancedCfg.type,
-          updateProjectWorkStart.type,
-          updateProjectWorkEnd.type,
-          addToProjectBreakTime.type,
-          updateProjectOrder.type,
-          archiveProject.type,
-          unarchiveProject.type,
-          moveToOtherProject.type,
-          moveNoteToOtherProject.type,
-
-          moveProjectTaskInBacklogList.type,
-          moveProjectTaskToBacklogList.type,
-          moveProjectTaskToRegularList.type,
-          moveProjectTaskUpInBacklogList.type,
-          moveProjectTaskDownInBacklogList.type,
-          moveProjectTaskToTopInBacklogList.type,
-          moveProjectTaskToBottomInBacklogList.type,
-          moveProjectTaskToBacklogListAuto.type,
-          moveProjectTaskToRegularListAuto.type,
-        ),
-        switchMap((a) => {
-          // exclude ui only actions
-          if (
-            [updateProjectWorkStart.type, updateProjectWorkEnd.type].includes(
-              a.type as any,
-            )
-          ) {
-            return this.saveToLs$(false);
-          } else {
-            return this.saveToLs$(true);
-          }
-        }),
-      ),
-    { dispatch: false },
-  );
-
-  updateProjectStorageConditionalNote$: Observable<unknown> = createEffect(
-    () =>
-      this._actions$.pipe(
-        ofType(updateNoteOrder, addNote, deleteNote),
-        switchMap((a) => {
-          let isChange = false;
-          switch (a.type) {
-            case updateNoteOrder.type:
-              isChange = a.activeContextType === WorkContextType.PROJECT;
-              break;
-            case addNote.type:
-              isChange = !!a.note.projectId;
-              break;
-            case deleteNote.type:
-              isChange = !!a.projectId;
-              break;
-          }
-          return isChange ? of(a) : EMPTY;
-        }),
-        switchMap(() => this.saveToLs$(true)),
-      ),
-    { dispatch: false },
-  );
-
-  updateProjectStorageConditionalTask$: Observable<unknown> = createEffect(
-    () =>
-      this._actions$.pipe(
-        ofType(
-          addTask,
-          deleteTask,
-          moveToOtherProject,
-          restoreTask,
-          moveToArchive_,
-          convertToMainTask,
-        ),
-        switchMap((a) => {
-          let isChange = false;
-          switch (a.type) {
-            case addTask.type:
-              isChange = !!a.task.projectId;
-              break;
-            case deleteTask.type:
-              isChange = !!a.task.projectId;
-              break;
-            case moveToOtherProject.type:
-              isChange = !!a.task.projectId;
-              break;
-            case moveToArchive_.type:
-              isChange = !!a.tasks.find((task) => !!task.projectId);
-              break;
-            case restoreTask.type:
-              isChange = !!a.task.projectId;
-              break;
-            case convertToMainTask.type:
-              isChange = !!a.task.projectId;
-              break;
-          }
-          return isChange ? of(a) : EMPTY;
-        }),
-        switchMap(() => this.saveToLs$(true)),
-      ),
-    { dispatch: false },
-  );
-
-  updateProjectStorageConditional$: Observable<unknown> = createEffect(
-    () =>
-      this._actions$.pipe(
-        ofType(moveTaskInTodayList, moveTaskUpInTodayList, moveTaskDownInTodayList),
-        filter((p) => p.workContextType === WorkContextType.PROJECT),
-        switchMap(() => this.saveToLs$(true)),
-      ),
-    { dispatch: false },
-  );
-
-  updateWorkStart$: any = createEffect(() =>
-    this._actions$.pipe(
-      ofType(addTimeSpent),
-      filter(({ task }) => !!task.projectId),
-      concatMap(({ task }) =>
-        this._projectService.getByIdOnce$(task.projectId as string).pipe(first()),
-      ),
-      filter((project: Project) => !project.workStart[this._dateService.todayStr()]),
-      map((project) => {
-        return updateProjectWorkStart({
-          id: project.id,
-          date: this._dateService.todayStr(),
-          newVal: Date.now(),
-        });
-      }),
-    ),
-  );
-
-  updateWorkEnd$: Observable<unknown> = createEffect(() =>
-    this._actions$.pipe(
-      ofType(addTimeSpent),
-      filter(({ task }) => !!task.projectId),
-      map(({ task }) => {
-        return updateProjectWorkEnd({
-          id: task.projectId as string,
-          date: this._dateService.todayStr(),
-          newVal: Date.now(),
-        });
-      }),
-    ),
-  );
-
-  onProjectIdChange$: Observable<unknown> = createEffect(() =>
-    this._actions$.pipe(
-      ofType(setActiveWorkContext),
-      filter(({ activeType }) => activeType === WorkContextType.PROJECT),
-      switchMap((action) => {
-        const projectId = action.activeId;
-        return Promise.all([this._bookmarkService.loadStateForProject(projectId)]).then(
-          () => projectId,
-        );
-      }),
-      map((projectId) => {
-        return loadProjectRelatedDataSuccess({ projectId });
-      }),
-    ),
-  );
-
-  // TODO a solution for orphaned tasks might be needed
-
+  /**
+   * Handles non-archive cleanup when a project is deleted.
+   *
+   * NOTE: Archive cleanup (task removal, time tracking cleanup) is now handled by
+   * ArchiveOperationHandler, which is the single source of truth for archive operations.
+   *
+   * @see ArchiveOperationHandler._handleDeleteProject
+   */
   deleteProjectRelatedData: Observable<unknown> = createEffect(
     () =>
       this._actions$.pipe(
-        ofType(deleteProject),
-        tap(async ({ project, allTaskIds }) => {
-          // NOTE: we also do stuff on a reducer level (probably better to handle on this level @TODO refactor)
-          const id = project.id as string;
-          await this._persistenceService.removeCompleteRelatedDataForProject(id);
-          this._removeAllArchiveTasksForProject(id);
-          this._reminderService.removeRemindersByRelatedIds(allTaskIds);
-
-          // we also might need to account for this unlikely but very nasty scenario
-          const cfg = await this._globalConfigService.cfg$.pipe(take(1)).toPromise();
-          if (id === cfg.misc.defaultProjectId) {
-            this._globalConfigService.updateSection('misc', { defaultProjectId: null });
+        ofType(TaskSharedActions.deleteProject),
+        tap(({ projectId }) => {
+          const cfg = this._globalConfigService.cfg();
+          if (!cfg) {
+            return;
+          }
+          // Reset defaultProjectId to the Inbox if the deleted project was the
+          // default. (Inbox is the canonical "unset" target — see #7891; writing
+          // null would leave the settings dropdown blank now that "None" is hidden.)
+          if (projectId === cfg.tasks.defaultProjectId) {
+            this._globalConfigService.updateSection('tasks', {
+              defaultProjectId: INBOX_PROJECT.id,
+            });
+          }
+          // Clear misc.defaultStartPage if it pointed at the deleted project,
+          // otherwise users land on a dead route next app launch.
+          if (projectId === cfg.misc.defaultStartPage) {
+            this._globalConfigService.updateSection('misc', { defaultStartPage: 0 });
           }
         }),
       ),
@@ -285,7 +77,7 @@ export class ProjectEffects {
   //     this._actions$.pipe(
   //       ofType(archiveProject.type),
   //       tap(async ({ id }) => {
-  //         await this._persistenceService.archiveProject(id);
+  //         await this._pfapiService.archiveProject(id);
   //         // TODO remove reminders
   //         this._snackService.open({
   //           ico: 'archive',
@@ -300,7 +92,7 @@ export class ProjectEffects {
   //     this._actions$.pipe(
   //       ofType(unarchiveProject.type),
   //       tap(async ({ id }) => {
-  //         await this._persistenceService.unarchiveProject(id);
+  //         await this._pfapiService.unarchiveProject(id);
   //
   //         this._snackService.open({
   //           ico: 'unarchive',
@@ -317,7 +109,8 @@ export class ProjectEffects {
   snackUpdateBaseSettings$: Observable<unknown> = createEffect(
     () =>
       this._actions$.pipe(
-        ofType(updateProject.type),
+        ofType(updateProject),
+        filter((a) => !a.isSkipSnack),
         tap(() => {
           this._snackService.open({
             type: 'SUCCESS',
@@ -344,10 +137,27 @@ export class ProjectEffects {
     { dispatch: false },
   );
 
+  /**
+   * Deleting a project deletes its notes in the same reducer pass; clear any
+   * crash-leftover drafts for them so a deleted note's text does not linger
+   * in localStorage. Remote project deletions do not reach LOCAL_ACTIONS;
+   * their leftover drafts age out via the 14-day startup sweep instead.
+   */
+  clearNoteDraftsOnProjectDelete: Observable<unknown> = createEffect(
+    () =>
+      this._actions$.pipe(
+        ofType(TaskSharedActions.deleteProject),
+        tap(({ noteIds }) => {
+          noteIds.forEach((id) => this._localDraftService.clearDraft('NOTE', id));
+        }),
+      ),
+    { dispatch: false },
+  );
+
   showDeletionSnack: Observable<unknown> = createEffect(
     () =>
       this._actions$.pipe(
-        ofType(deleteProject.type),
+        ofType(TaskSharedActions.deleteProject.type),
         tap(() => {
           this._snackService.open({
             ico: 'delete_forever',
@@ -357,42 +167,4 @@ export class ProjectEffects {
       ),
     { dispatch: false },
   );
-
-  private async _removeAllArchiveTasksForProject(
-    projectIdToDelete: string,
-  ): Promise<any> {
-    const taskArchiveState: TaskArchive =
-      await this._persistenceService.taskArchive.loadState();
-    // NOTE: task archive might not if there never was a day completed
-    const archiveTaskIdsToDelete = !!taskArchiveState
-      ? (taskArchiveState.ids as string[]).filter((id) => {
-          const t = taskArchiveState.entities[id] as Task;
-          if (!t) {
-            throw new Error('No task');
-          }
-          return t.projectId === projectIdToDelete;
-        })
-      : [];
-    console.log(
-      'Archive TaskIds to remove/unique',
-      archiveTaskIdsToDelete,
-      unique(archiveTaskIdsToDelete),
-    );
-    // remove archive
-    await this._persistenceService.taskArchive.execAction(
-      deleteTasks({ taskIds: archiveTaskIdsToDelete }),
-      true,
-    );
-  }
-
-  private saveToLs$(isSyncModelChange: boolean): Observable<unknown> {
-    return this._store$.pipe(
-      // tap(() => console.log('SAVE')),
-      select(selectProjectFeatureState),
-      take(1),
-      switchMap((projectState) =>
-        this._persistenceService.project.saveState(projectState, { isSyncModelChange }),
-      ),
-    );
-  }
 }

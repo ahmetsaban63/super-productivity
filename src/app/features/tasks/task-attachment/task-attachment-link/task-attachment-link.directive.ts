@@ -21,6 +21,16 @@ export class TaskAttachmentLinkDirective {
       const el = ev.target as HTMLElement;
       el.blur();
     }
+
+    if (!IS_ELECTRON && this._isLocalFileUrl(href)) {
+      ev.preventDefault();
+      this._snackService.open({
+        msg: T.F.ATTACHMENT.LOCAL_FILE_UNAVAILABLE,
+        type: 'ERROR',
+      });
+      return;
+    }
+
     if (IS_ELECTRON) {
       ev.preventDefault();
       const type = this.type();
@@ -29,16 +39,21 @@ export class TaskAttachmentLinkDirective {
       } else if (type === 'FILE') {
         window.ea.openPath(href);
       } else if (type === 'COMMAND') {
+        // COMMAND attachments can no longer run shell commands: the exec IPC was
+        // removed to close GHSA-256q. Legacy/imported COMMAND attachments still
+        // render but are inert on click.
         this._snackService.open({
-          msg: T.GLOBAL_SNACK.RUNNING_X,
-          translateParams: { str: href },
-          ico: 'laptop_windows',
+          msg: T.F.ATTACHMENT.COMMAND_UNSUPPORTED,
+          type: 'ERROR',
         });
-        this._exec(href);
       }
     } else if (this.type() === 'LINK') {
       this._openExternalUrl(href);
     }
+  }
+
+  private _isLocalFileUrl(url: string): boolean {
+    return url.toLowerCase().startsWith('file://');
   }
 
   private _openExternalUrl(rawUrl: string): void {
@@ -59,9 +74,5 @@ export class TaskAttachmentLinkDirective {
         win.focus();
       }
     }
-  }
-
-  private _exec(command: string): void {
-    window.ea.exec(command);
   }
 }

@@ -6,9 +6,11 @@ import { combineLatest, EMPTY, merge, Observable, of, Subject } from 'rxjs';
 import {
   distinctUntilChanged,
   filter,
+  first,
   map,
   shareReplay,
   switchMap,
+  throttleTime,
   withLatestFrom,
 } from 'rxjs/operators';
 import { realTimer$ } from '../../util/real-timer';
@@ -22,8 +24,20 @@ import { T } from '../../t.const';
 import { TranslateService } from '@ngx-translate/core';
 import { TimeTrackingConfig } from '../config/global-config.model';
 import { IS_TOUCH_ONLY } from '../../util/is-touch-only';
-import { DateService } from 'src/app/core/date/date.service';
+import { DateService } from '../../core/date/date.service';
 import { TakeABreakService } from '../take-a-break/take-a-break.service';
+import { NotifyService } from '../../core/notify/notify.service';
+import { UiHelperService } from '../ui-helper/ui-helper.service';
+import { playSound } from '../../util/play-sound';
+import { Store } from '@ngrx/store';
+import {
+  selectCurrentScreen,
+  selectTimer,
+} from '../focus-mode/store/focus-mode.selectors';
+import { selectIsFocusModeEnabled } from '../config/store/global-config.reducer';
+import { FocusScreen } from '../focus-mode/focus-mode.model';
+
+const DESKTOP_NOTIFICATION_THROTTLE = 60 * 1000;
 
 @Injectable({
   providedIn: 'root',
@@ -37,6 +51,9 @@ export class TrackingReminderService {
   private _translateService = inject(TranslateService);
   private _dateService = inject(DateService);
   private _takeABreakService = inject(TakeABreakService);
+  private _notifyService = inject(NotifyService);
+  private _uiHelperService = inject(UiHelperService);
+  private _store = inject(Store);
 
   _cfg$: Observable<TimeTrackingConfig> = this._globalConfigService.cfg$.pipe(
     map((cfg) => cfg?.timeTracking),
@@ -55,6 +72,20 @@ export class TrackingReminderService {
     this._idleService.isIdle$.pipe(filter((isIdle) => isIdle)),
   );
 
+  private _isFocusModeActive$: Observable<boolean> = combineLatest([
+    this._store.select(selectIsFocusModeEnabled),
+    this._store.select(selectTimer),
+    this._store.select(selectCurrentScreen),
+  ]).pipe(
+    map(
+      ([isEnabled, timer, screen]) =>
+        isEnabled &&
+        ((timer.isRunning && timer.purpose !== null) ||
+          screen === FocusScreen.SessionDone),
+    ),
+    distinctUntilChanged(),
+  );
+
   remindCounter$: Observable<number> = this._cfg$.pipe(
     switchMap((cfg) =>
       !cfg?.isTrackingReminderEnabled ||
@@ -63,8 +94,12 @@ export class TrackingReminderService {
         : combineLatest([
             this._taskService.currentTaskId$,
             this._idleService.isIdle$,
+            this._isFocusModeActive$,
           ]).pipe(
-            map(([currentTaskId, isIdle]) => !currentTaskId && !isIdle),
+            map(
+              ([currentTaskId, isIdle, isFocusModeActive]) =>
+                !currentTaskId && !isIdle && !isFocusModeActive,
+            ),
             distinctUntilChanged(),
             switchMap((isEnabled) => (isEnabled ? this._resetableCounter$ : of(0))),
             filter((time) => time > cfg.trackingReminderMinTime),
@@ -72,6 +107,9 @@ export class TrackingReminderService {
     ),
     shareReplay(),
   );
+
+  // New throttled notification stream
+  private _throttledNotificationTrigger$ = new Subject<string>();
 
   init(): void {
     this.remindCounter$.subscribe((count) => {
@@ -81,6 +119,30 @@ export class TrackingReminderService {
     this._hideTrigger$.subscribe((v) => {
       this._hideBanner();
     });
+
+    // Set up throttled notification handling
+    this._throttledNotificationTrigger$
+      .pipe(
+        throttleTime(DESKTOP_NOTIFICATION_THROTTLE),
+        // Get all needed config in one go
+        withLatestFrom(
+          this._globalConfigService.sound$,
+          this._globalConfigService.cfg$.pipe(map((cfg) => cfg.timeTracking)),
+        ),
+      )
+      .subscribe(([durationStr, soundCfg, timeTrackingCfg]) => {
+        this._showNotification(durationStr);
+
+        // Play sound if configured
+        if (soundCfg.trackTimeSound) {
+          playSound(soundCfg.trackTimeSound as string);
+        }
+
+        // Focus window if enabled
+        if (timeTrackingCfg.isTrackingReminderFocusWindow) {
+          this._focusWindow();
+        }
+      });
   }
 
   private _hideBanner(): void {
@@ -93,13 +155,11 @@ export class TrackingReminderService {
       return;
     }
 
-    const durationStr = msToString(duration);
     this._bannerService.open({
       id: BannerId.StartTrackingReminder,
       ico: 'timer',
-      msg: this._translateService.instant(T.F.TIME_TRACKING.B_TTR.MSG, {
-        time: durationStr,
-      }),
+      msg: T.F.TIME_TRACKING.B_TTR.MSG_WITHOUT_TIME,
+      timer$: this.remindCounter$,
       action: {
         label: T.F.TIME_TRACKING.B_TTR.ADD_TO_TASK,
         fn: () => this._openDialog(),
@@ -109,6 +169,21 @@ export class TrackingReminderService {
         fn: () => this._dismissBanner(),
       },
     });
+
+    // Handle desktop notification if enabled
+    this._globalConfigService.cfg$
+      .pipe(
+        filter((cfg) => !!cfg),
+        first(),
+      )
+      .subscribe((cfg) => {
+        // Show desktop notification if enabled
+        if (cfg.timeTracking.isTrackingReminderNotify) {
+          // Instead of showing directly, queue it through the throttled subject
+          const durationStr = msToString(duration);
+          this._throttledNotificationTrigger$.next(durationStr);
+        }
+      });
   }
 
   private _openDialog(): void {
@@ -140,7 +215,7 @@ export class TrackingReminderService {
               });
               this._taskService.setCurrentId(currId);
             } else {
-              this._taskService.addTimeSpent(task, timeSpent, undefined, true);
+              this._taskService.addTimeSpentAndSync(task, timeSpent);
               this._taskService.setCurrentId(task.id);
             }
           }
@@ -152,5 +227,21 @@ export class TrackingReminderService {
   private _dismissBanner(): void {
     this._bannerService.dismiss(BannerId.StartTrackingReminder);
     this._manualReset$.next();
+  }
+
+  private _showNotification(durationStr: string): void {
+    this._notifyService.notify({
+      title: this._translateService.instant(
+        T.F.TIME_TRACKING.D_TRACKING_REMINDER.NOTIFICATION_TITLE,
+      ),
+      body: this._translateService.instant(T.F.TIME_TRACKING.B_TTR.MSG, {
+        time: durationStr,
+      }),
+      requireInteraction: true,
+    });
+  }
+
+  private _focusWindow(): void {
+    this._uiHelperService.focusAppAfterNotification();
   }
 }

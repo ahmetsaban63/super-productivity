@@ -1,15 +1,18 @@
 <div class="wrapper">
-  @if (projectMetricsService.simpleMetrics$ | async; as sm) {
+  @if (simpleMetrics(); as sm) {
     <section
       class="basic-stats"
       [@fade]
     >
-      <h1
-        class="mat-h1"
-        style="text-align: center"
-      >
-        {{ T.PM.TITLE | translate }}
-      </h1>
+      <div class="metrics-header">
+        <h1 class="mat-h1">
+          {{ metricsTitle() | translate }}
+        </h1>
+        <share-button
+          [payload]="sharePayload()"
+          [tooltip]="'Share your productivity stats'"
+        />
+      </div>
       <!--  <h2>Basic Metrics</h2>-->
       <p>
         <i>{{ sm.start }} – {{ sm.end }}</i>
@@ -63,103 +66,96 @@
       </div>
     </section>
   }
-  @if (!(metricService.hasData$ | async)) {
-    <p style="margin-top: 32px">
-      {{ T.F.METRIC.CMP.NO_ADDITIONAL_DATA_YET | translate }}
-    </p>
-  }
-  @if (metricService.hasData$ | async) {
-    <section class="metric-metrics">
-      <h1>{{ T.F.METRIC.CMP.GLOBAL_METRICS | translate }}</h1>
-      <section class="pie-charts">
-        @if (metricService.improvementCountsPieChartData$ | async; as improvementCounts) {
-          <section>
-            <h3>{{ T.F.METRIC.CMP.IMPROVEMENT_SELECTION_COUNT | translate }}</h3>
-            <canvas
-              [type]="pieChartType"
-              [data]="improvementCounts"
-              [legend]="improvementCounts?.datasets[0].data.length < 12"
-              [options]="pieChartOptions"
-              baseChart
-            >
-            </canvas>
-          </section>
-        }
-        @if (metricService.obstructionCountsPieChartData$ | async; as obstructionCounts) {
-          <section>
-            <h3>{{ T.F.METRIC.CMP.OBSTRUCTION_SELECTION_COUNT | translate }}</h3>
-            <canvas
-              [type]="pieChartType"
-              [data]="obstructionCounts"
-              [legend]="obstructionCounts?.datasets[0].data.length < 12"
-              [options]="pieChartOptions"
-              baseChart
-            >
-            </canvas>
-          </section>
-        }
-      </section>
-      <section class="line-charts">
-        @if (productivityHappiness$ | async; as productivityHappiness) {
-          <section>
-            <h3>{{ T.F.METRIC.CMP.MOOD_PRODUCTIVITY_OVER_TIME | translate }}</h3>
-            <div class="chart-wrapper">
-              <div class="inner-chart-wrapper">
-                <canvas
+
+  <section class="heatmap-section">
+    <activity-heatmap></activity-heatmap>
+  </section>
+
+  @if (isShowingAllTasks()) {
+    @if (metricService.hasData()) {
+      <section class="metric-metrics">
+        <h1>{{ T.F.METRIC.CMP.GLOBAL_METRICS | translate }}</h1>
+        <section class="line-charts">
+          @if (productivityBreakdownChartData(); as breakdownChart) {
+            @if (breakdownChart) {
+              <section>
+                <h3>{{ T.F.METRIC.CMP.PRODUCTIVITY_BREAKDOWN_OVER_TIME | translate }}</h3>
+                <lazy-chart
                   [type]="lineChartType"
-                  [data]="productivityHappiness"
+                  [datasets]="breakdownChart.datasets"
+                  [labels]="breakdownChart.labels"
                   [legend]="true"
                   [options]="lineChartOptions"
-                  baseChart
-                ></canvas>
-              </div>
-            </div>
-          </section>
-        }
-      </section>
-    </section>
-  }
-  @if (metricService.hasData$ | async) {
-    <section class="metric-metrics">
-      <h2>{{ T.F.METRIC.CMP.SIMPLE_COUNTERS | translate }}</h2>
-      <section class="line-charts">
-        @if (simpleClickCounterData$ | async; as simpleCounterClickData) {
-          <section>
-            <h3>{{ T.F.METRIC.CMP.SIMPLE_CLICK_COUNTERS_OVER_TIME | translate }}</h3>
-            <div class="chart-wrapper">
-              <div class="inner-chart-wrapper">
-                <canvas
-                  [type]="lineChartType"
-                  [data]="simpleCounterClickData"
-                  [labels]="simpleCounterClickData.labels"
-                  [options]="lineChartOptions"
-                  [legend]="true"
-                  baseChart
+                  height="400px"
+                  [shareFileName]="'productivity-sustainability-breakdown.png'"
+                  [enableTimeframeSelector]="true"
                 >
-                </canvas>
-              </div>
-            </div>
-          </section>
-        }
-        @if (simpleCounterStopWatchData$ | async; as simpleCounterStopWatchData) {
-          <section>
-            <h3>{{ T.F.METRIC.CMP.SIMPLE_STOPWATCH_COUNTERS_OVER_TIME | translate }}</h3>
-            <div class="chart-wrapper">
-              <div class="inner-chart-wrapper">
-                <canvas
+                </lazy-chart>
+              </section>
+            }
+          }
+          @if (focusSessionData(); as focusSessions) {
+            @if (focusSessions.labels?.length) {
+              <section>
+                <h3>{{ T.F.METRIC.CMP.FOCUS_SESSION_TRENDS | translate }}</h3>
+                <lazy-chart
                   [type]="lineChartType"
-                  [data]="simpleCounterStopWatchData"
-                  [labels]="simpleCounterStopWatchData.labels"
-                  [options]="lineChartOptions"
+                  [datasets]="focusSessions.datasets"
+                  [labels]="focusSessions.labels"
                   [legend]="true"
-                  baseChart
-                >
-                </canvas>
-              </div>
-            </div>
-          </section>
-        }
+                  [options]="lineChartOptions"
+                  height="400px"
+                  [shareFileName]="'focus-session-trends.png'"
+                  [enableTimeframeSelector]="true"
+                ></lazy-chart>
+              </section>
+            }
+          }
+        </section>
       </section>
-    </section>
+      <section class="metric-metrics">
+        <h2>{{ T.F.METRIC.CMP.SIMPLE_COUNTERS | translate }}</h2>
+        <section class="line-charts">
+          @if (simpleClickCounterData(); as simpleCounterClickData) {
+            <section>
+              <h3>{{ T.F.METRIC.CMP.SIMPLE_CLICK_COUNTERS_OVER_TIME | translate }}</h3>
+              <lazy-chart
+                [type]="lineChartType"
+                [datasets]="simpleCounterClickData.datasets"
+                [labels]="simpleCounterClickData.labels"
+                [options]="lineChartOptions"
+                [legend]="true"
+                height="400px"
+                [shareFileName]="'simple-click-counters-over-time.png'"
+                [enableTimeframeSelector]="true"
+              >
+              </lazy-chart>
+            </section>
+          }
+          @if (simpleCounterStopWatchData(); as simpleCounterStopWatchData) {
+            <section>
+              <h3>
+                {{ T.F.METRIC.CMP.SIMPLE_STOPWATCH_COUNTERS_OVER_TIME | translate }}
+              </h3>
+              <lazy-chart
+                [type]="lineChartType"
+                [datasets]="simpleCounterStopWatchData.datasets"
+                [labels]="simpleCounterStopWatchData.labels"
+                [options]="lineChartOptions"
+                [legend]="true"
+                height="400px"
+                [shareFileName]="'simple-stopwatch-counters-over-time.png'"
+                [enableTimeframeSelector]="true"
+              >
+              </lazy-chart>
+            </section>
+          }
+        </section>
+      </section>
+    } @else {
+      <p class="no-data-msg">
+        {{ T.F.METRIC.CMP.NO_ADDITIONAL_DATA_YET | translate }}
+      </p>
+    }
   }
 </div>

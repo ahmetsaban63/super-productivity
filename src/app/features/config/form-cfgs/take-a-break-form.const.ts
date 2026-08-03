@@ -1,4 +1,3 @@
-/* eslint-disable max-len */
 import { ConfigFormSection, TakeABreakConfig } from '../global-config.model';
 import { T } from '../../../t.const';
 /* eslint-disable @typescript-eslint/naming-convention */
@@ -101,11 +100,13 @@ export const TAKE_A_BREAK_FORM_CFG: ConfigFormSection<TakeABreakConfig> = {
       type: 'repeat',
       templateOptions: {
         addText: T.GCF.TAKE_A_BREAK.ADD_NEW_IMG,
-        required: true,
         defaultValue: '',
       },
       fieldArray: {
         type: 'input',
+        templateOptions: {
+          minLength: 3,
+        },
       },
     },
   ],

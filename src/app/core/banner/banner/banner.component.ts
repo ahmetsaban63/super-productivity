@@ -8,7 +8,7 @@ import { bannerAnimation } from './banner.ani';
 import { fadeAnimation } from '../../../ui/animations/fade.ani';
 import { MatProgressBar } from '@angular/material/progress-bar';
 import { MatIcon } from '@angular/material/icon';
-import { MatButton } from '@angular/material/button';
+import { MatButton, MatIconButton } from '@angular/material/button';
 import { AsyncPipe } from '@angular/common';
 import { TranslatePipe } from '@ngx-translate/core';
 import { MsToMinuteClockStringPipe } from '../../../ui/duration/ms-to-minute-clock-string.pipe';
@@ -23,6 +23,7 @@ import { MsToMinuteClockStringPipe } from '../../../ui/duration/ms-to-minute-clo
     MatProgressBar,
     MatIcon,
     MatButton,
+    MatIconButton,
     AsyncPipe,
     TranslatePipe,
     MsToMinuteClockStringPipe,
@@ -54,9 +55,10 @@ export class BannerComponent {
   dismiss(bannerId: string): void {
     this.bannerService.dismiss(bannerId as BannerId);
   }
-
-  action(bannerId: string, bannerAction: BannerAction): void {
-    this.dismiss(bannerId);
+  action(banner: Banner, bannerAction: BannerAction): void {
+    if (!banner.isKeepVisibleAfterAction) {
+      this.dismiss(banner.id);
+    }
     bannerAction.fn();
   }
 

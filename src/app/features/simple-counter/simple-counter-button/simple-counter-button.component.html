@@ -1,15 +1,26 @@
 @if (simpleCounter(); as sc) {
   <div class="wrapper">
     @if (sc.type === SimpleCounterType.StopWatch) {
+      @if (sc.isOn) {
+        <progress-circle [isPulsing]="true"></progress-circle>
+      }
       <button
         (click)="toggleStopwatch()"
         (contextmenu)="edit($event)"
         (longPress)="edit()"
         [color]="sc.isOn ? 'accent' : ''"
+        [class.isOn]="sc.isOn"
+        [attr.aria-label]="sc.title"
         class="main-btn stopwatch"
-        mat-mini-fab
+        mat-icon-button
       >
-        <mat-icon>{{ sc.icon }}</mat-icon>
+        @if (sc.icon && sc.icon.startsWith(':')) {
+          <mat-icon [svgIcon]="sc.icon"></mat-icon>
+        } @else if (sc.icon) {
+          <mat-icon>{{ sc.icon }}</mat-icon>
+        } @else {
+          <div class="habit-initial">{{ sc.title.charAt(0).toUpperCase() }}</div>
+        }
         @if (isSuccess()) {
           <mat-icon class="check-ico">check</mat-icon>
         }
@@ -24,11 +35,18 @@
         (click)="toggleCounter()"
         (contextmenu)="edit($event)"
         (longPress)="edit()"
+        [attr.aria-label]="sc.title"
         class="main-btn"
         color=""
-        mat-mini-fab
+        mat-icon-button
       >
-        <mat-icon>{{ sc.icon }}</mat-icon>
+        @if (sc.icon && sc.icon.startsWith(':')) {
+          <mat-icon [svgIcon]="sc.icon"></mat-icon>
+        } @else if (sc.icon) {
+          <mat-icon>{{ sc.icon }}</mat-icon>
+        } @else {
+          <div class="habit-initial">{{ sc.title.charAt(0).toUpperCase() }}</div>
+        }
         @if (isSuccess()) {
           <mat-icon class="check-ico">check</mat-icon>
         }
@@ -39,21 +57,35 @@
     }
     <!----->
     @if (sc.type === SimpleCounterType.RepeatedCountdownReminder) {
+      @let countdownTime = countdownTime$ | async;
+      @if (sc.isOn && hasVisibleCountdownTime(sc, countdownTime)) {
+        <progress-circle
+          [progress]="calcCountdownProgress(countdownTime, sc.countdownDuration)"
+        ></progress-circle>
+      }
       <button
         (click)="isTimeUp() ? countUpAndNextRepeatCountdownSession() : toggleStopwatch()"
         (contextmenu)="edit($event)"
         (longPress)="edit()"
         [color]="sc.isOn && !isTimeUp() ? 'accent' : ''"
+        [class.isOn]="sc.isOn && !isTimeUp()"
         [class.isTimeUp]="isTimeUp()"
+        [attr.aria-label]="sc.title"
         class="main-btn repeated-countdown"
-        mat-mini-fab
+        mat-icon-button
       >
-        <mat-icon>{{ sc.icon }}</mat-icon>
+        @if (sc.icon && sc.icon.startsWith(':')) {
+          <mat-icon [svgIcon]="sc.icon"></mat-icon>
+        } @else if (sc.icon) {
+          <mat-icon>{{ sc.icon }}</mat-icon>
+        } @else {
+          <div class="habit-initial">{{ sc.title.charAt(0).toUpperCase() }}</div>
+        }
         @if (isSuccess()) {
           <mat-icon class="check-ico">check</mat-icon>
         }
       </button>
-      @if (sc.isOn && (countdownTime$ | async); as countdownTime) {
+      @if (hasVisibleCountdownTime(sc, countdownTime)) {
         <div class="extra-label">{{ countdownTime | msToMinuteClockString }}</div>
       }
       @if (sc.countOnDay[todayStr()] || isTimeUp()) {

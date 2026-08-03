@@ -18,6 +18,7 @@ type HueValue =
   | 'A400'
   | 'A700';
 
+// TODO REMOVE OR MOVE AND LEGACY RENAME ALL THESE
 export interface BreakTimeCopy {
   [key: string]: number;
 }
@@ -40,17 +41,20 @@ export type WorkContextAdvancedCfg = Readonly<{
   worklogExportSettings: WorklogExportSettings;
 }>;
 
+// TODO handle more strictly
 export type WorkContextThemeCfg = Readonly<{
-  isAutoContrast: boolean;
-  isDisableBackgroundGradient: boolean;
-  primary: string;
-  huePrimary: HueValue;
-  accent: string;
-  hueAccent: HueValue;
-  warn: string;
-  hueWarn: HueValue;
-  backgroundImageDark: string | null;
-  backgroundImageLight: string | null;
+  isAutoContrast?: boolean;
+  isDisableBackgroundTint?: boolean;
+  primary?: string;
+  huePrimary?: HueValue;
+  accent?: string;
+  hueAccent?: HueValue;
+  warn?: string;
+  hueWarn?: HueValue;
+  backgroundImageDark?: string | null;
+  backgroundImageLight?: string | null;
+  backgroundOverlayOpacity?: number;
+  backgroundImageBlur?: number;
 }>;
 
 export enum WorkContextType {
@@ -59,13 +63,9 @@ export enum WorkContextType {
 }
 
 export interface WorkContextCommon {
-  workStart: WorkStartEnd;
-  workEnd: WorkStartEnd;
-  breakTime: BreakTime;
-  breakNr: BreakNr;
   advancedCfg: WorkContextAdvancedCfg;
   theme: WorkContextThemeCfg;
-  icon: string | null;
+  icon?: string | null;
   taskIds: string[];
   id: string;
   title: string;
@@ -74,7 +74,7 @@ export interface WorkContextCommon {
 export type WorkContextAdvancedCfgKey = keyof WorkContextAdvancedCfg;
 
 export interface WorkContextCopy extends WorkContextCommon {
-  icon: string | null;
+  icon?: string | null;
   routerLink: string;
   isEnableBacklog?: boolean;
   backlogTaskIds?: string[];

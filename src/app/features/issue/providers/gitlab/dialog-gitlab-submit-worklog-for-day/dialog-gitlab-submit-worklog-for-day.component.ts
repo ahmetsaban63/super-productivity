@@ -12,12 +12,12 @@ import { IssueTaskTimeTracked, Task, TimeSpentOnDay } from '../../../../tasks/ta
 import { BehaviorSubject, Observable } from 'rxjs';
 import { GitlabApiService } from '../gitlab-api/gitlab-api.service';
 import { first, map, tap } from 'rxjs/operators';
-import { throttle } from 'helpful-decorators';
+import { throttle } from '../../../../../util/decorators';
 import { SnackService } from '../../../../../core/snack/snack.service';
 import { Store } from '@ngrx/store';
 import { IssueProviderService } from '../../../issue-provider.service';
 import { msToString, MsToStringPipe } from '../../../../../ui/duration/ms-to-string.pipe';
-import { updateTask } from '../../../../tasks/store/task.actions';
+import { TaskSharedActions } from '../../../../../root-store/meta/task-shared.actions';
 import { assertTruthy } from '../../../../../util/assert-truthy';
 import { MatIcon } from '@angular/material/icon';
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
@@ -39,6 +39,7 @@ import { MsToClockStringPipe } from '../../../../../ui/duration/ms-to-clock-stri
 import { MatTooltip } from '@angular/material/tooltip';
 import { InlineInputComponent } from '../../../../../ui/inline-input/inline-input.component';
 import { MatButton } from '@angular/material/button';
+import { IssueLog } from '../../../../../core/log';
 
 interface TmpTask {
   id: string;
@@ -102,21 +103,21 @@ export class DialogGitlabSubmitWorklogForDayComponent {
       id: t.id,
       issueId: assertTruthy(t.issueId),
       title: t.title,
-      issueTimeTracked: t.issueTimeTracked,
+      issueTimeTracked: t.issueTimeTracked || null,
       timeSpentOnDay: t.timeSpentOnDay,
       timeTrackedAlreadyRemote: 0,
-      isPastTrackedData: !!Object.keys(t.timeSpentOnDay).find(
+      isPastTrackedData: !!Object.keys(t.timeSpentOnDay || {}).find(
         (dayStr) =>
           dayStr !== this.day &&
-          t.timeSpentOnDay[dayStr] >
+          (t.timeSpentOnDay?.[dayStr] ?? 0) >
             ((t.issueTimeTracked && t.issueTimeTracked[dayStr]) || 0),
       ),
-      timeToSubmit: Object.keys(t.timeSpentOnDay).reduce((acc, dayStr) => {
+      timeToSubmit: Object.keys(t.timeSpentOnDay || {}).reduce((acc, dayStr) => {
         if (t.issueTimeTracked && t.issueTimeTracked[dayStr]) {
-          const diff = t.timeSpentOnDay[dayStr] - t.issueTimeTracked[dayStr];
+          const diff = (t.timeSpentOnDay?.[dayStr] ?? 0) - t.issueTimeTracked[dayStr];
           return diff > 0 ? diff + acc : acc;
         } else {
-          return acc + t.timeSpentOnDay[dayStr];
+          return acc + (t.timeSpentOnDay?.[dayStr] ?? 0);
         }
       }, 0),
     })),
@@ -185,7 +186,7 @@ export class DialogGitlabSubmitWorklogForDayComponent {
               first(),
               tap(() =>
                 this._store.dispatch(
-                  updateTask({
+                  TaskSharedActions.updateTask({
                     task: {
                       id: t.id,
                       changes: {
@@ -209,7 +210,7 @@ export class DialogGitlabSubmitWorklogForDayComponent {
       });
       this.close();
     } catch (e) {
-      console.error(e);
+      IssueLog.err(e);
       this._snackService.open({
         type: 'ERROR',
         // TODO translate

@@ -1,75 +1,79 @@
 package com.superproductivity.superproductivity.webview
 
-import android.Manifest
 import android.app.Activity
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Context
+import android.app.ForegroundServiceStartNotAllowedException
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Build
-import android.util.Base64
+import android.provider.Settings
 import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.widget.Toast
-import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
-import androidx.documentfile.provider.DocumentFile
-import com.anggrayudi.storage.SimpleStorageHelper
-import com.anggrayudi.storage.file.*
 import com.superproductivity.superproductivity.App
 import com.superproductivity.superproductivity.BuildConfig
-import com.superproductivity.superproductivity.app.AppLifecycleObserver
-import com.superproductivity.superproductivity.FullscreenActivity
 import com.superproductivity.superproductivity.FullscreenActivity.Companion.WINDOW_INTERFACE_PROPERTY
-import com.superproductivity.superproductivity.R
 import com.superproductivity.superproductivity.app.LaunchDecider
-import org.json.JSONException
+import com.superproductivity.superproductivity.review.InAppReview
+import com.superproductivity.superproductivity.service.BackgroundSyncCredentialStore
+import com.superproductivity.superproductivity.service.FocusModeForegroundService
+import com.superproductivity.superproductivity.service.ForegroundServiceFailure
+import com.superproductivity.superproductivity.service.ReminderNotificationHelper
+import com.superproductivity.superproductivity.service.SyncReminderScheduler
+import com.superproductivity.superproductivity.service.TrackingForegroundService
+import com.superproductivity.superproductivity.widget.ReminderDoneQueue
+import com.superproductivity.superproductivity.widget.ReminderSnoozeQueue
+import com.superproductivity.superproductivity.widget.ReminderTapQueue
+import com.superproductivity.superproductivity.widget.ShareIntentQueue
+import com.superproductivity.superproductivity.widget.TaskListWidgetProvider
+import com.superproductivity.superproductivity.widget.WidgetDoneQueue
+import com.superproductivity.superproductivity.widget.WidgetTaskQueue
 import org.json.JSONObject
-import java.io.BufferedOutputStream
-import java.io.BufferedReader
-import java.io.ByteArrayOutputStream
-import java.io.File
-import java.io.FileReader
-import java.io.IOException
-import java.io.InputStream
-import java.io.Writer
-import java.net.HttpURLConnection
-import java.net.MalformedURLException
-import java.net.URL
-import java.nio.charset.StandardCharsets
-import java.security.cert.CertPathValidatorException
-import java.util.Locale
-import javax.net.ssl.SSLHandshakeException
+
 
 class JavaScriptInterface(
     private val activity: Activity,
     private val webView: WebView,
-    private val storageHelper: SimpleStorageHelper
 ) {
 
-    /**
-     * Instantiate the interface and set the context
-     */
-    open fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent) {
-        // Additional callback for scoped storage permission management on Android 10+
-        // Mandatory for Activity, but not for Fragment & ComponentActivity
-        Log.d("SuperProductivity", "onActivityResult")
-
-        if (resultCode == -1 && requestCode == -1) {
-            val takeFlags: Int = (Intent.FLAG_GRANT_READ_URI_PERMISSION
-                or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            data.data?.let { uri ->
-                activity.contentResolver.takePersistableUriPermission(uri, takeFlags)
+    private inline fun safeCall(
+        errorMsg: String,
+        foregroundService: String? = null,
+        block: () -> Unit
+    ) {
+        try {
+            block()
+        } catch (e: Exception) {
+            val isStartNotAllowed =
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    e is ForegroundServiceStartNotAllowedException
+            if (isStartNotAllowed) {
+                Log.e(TAG, "$errorMsg - ForegroundService restrictions violated (Android 12+). App may be in background.", e)
+            } else {
+                Log.e(TAG, errorMsg, e)
+            }
+            foregroundService?.let {
+                emitForegroundServiceStartFailed(
+                    it,
+                    if (isStartNotAllowed) {
+                        ForegroundServiceFailure.REASON_START_NOT_ALLOWED
+                    } else {
+                        ForegroundServiceFailure.REASON_PROMOTION_FAILED
+                    }
+                )
             }
         }
+    }
 
-        storageHelper.storage.onActivityResult(requestCode, resultCode, data)
+    private fun emitForegroundServiceStartFailed(service: String, reason: String) {
+        val payload = "{service:${JSONObject.quote(service)},reason:${JSONObject.quote(reason)}}"
+        val subjectPath = "${FN_PREFIX}onForegroundServiceStartFailed${'$'}"
+        callJavaScriptFunction(
+            "if(window.$WINDOW_INTERFACE_PROPERTY && " +
+                "$subjectPath) " +
+                "$subjectPath.next($payload)"
+        )
     }
 
     @Suppress("unused")
@@ -83,527 +87,434 @@ class JavaScriptInterface(
 
     @Suppress("unused")
     @JavascriptInterface
+    fun getTextZoom(): Int {
+        // Chromium initializes WebView text zoom from this system font scale.
+        // Reading WebSettings directly here would cross WebView's UI-thread boundary.
+        return (100 * activity.resources.configuration.fontScale).toInt()
+    }
+
+    // Launch the Play In-App Review flow (play flavor). Delegates to a
+    // flavor-specific InAppReview: the real Play Core implementation in src/play,
+    // and a no-op stub in src/fdroid so the proprietary library stays out of the
+    // F-Droid build. Play controls whether/when the card actually shows.
+    @Suppress("unused")
+    @JavascriptInterface
+    fun requestReview() {
+        activity.runOnUiThread {
+            InAppReview.request(activity)
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
     fun showToast(toast: String) {
         Toast.makeText(activity, toast, Toast.LENGTH_SHORT).show()
     }
 
-    @Suppress("unused")
-    @JavascriptInterface
-    fun updateTaskData(str: String) {
-        Log.w("TW", "JavascriptInterface: updateTaskData")
-//        val intent = Intent(activity.applicationContext, TaskListWidget::class.java)
-//        intent.action = TaskListWidget.LIST_CHANGED
-//        intent.putExtra("taskJson", str)
-//        (activity.application as App).dataHolder.data = str
-//        activity.sendBroadcast(intent)
-    }
-
-    // TODO remove for good after a while
-    @Suppress("unused")
-    @JavascriptInterface
-    fun updatePermanentNotification(title: String, message: String, progress: Int) {
-        Log.w("TW", "JavascriptInterface: REMOVED updateNotificationWidget")
-    }
 
     @Suppress("unused")
     @JavascriptInterface
-    open fun triggerGetGoogleToken() {
-        // NOTE: empty here, and only filled for google build flavor
-    }
-
-    @Suppress("unused")
-    @JavascriptInterface
-    // LEGACY
-    fun saveToDbNew(requestId: String, key: String, value: String) {
+    fun saveToDb(requestId: String, key: String, value: String) {
         (activity.application as App).keyValStore.set(key, value)
-        callJavaScriptFunction(FN_PREFIX + "saveToDbCallback('" + requestId + "')")
+        callJavaScriptFunction(FN_PREFIX + "saveToDbCallback(" + JSONObject.quote(requestId) + ")")
     }
 
+    // #7925: quote every arg so a stored value with ' / \ / newlines / </script>
+    // can't break out of the JS literal. (JSON.stringify does not escape
+    // apostrophes — pre-fix, a backup blob with one silently corrupted the load.)
     @Suppress("unused")
     @JavascriptInterface
-    // LEGACY
-    fun loadFromDbNew(requestId: String, key: String) {
+    fun loadFromDb(requestId: String, key: String) {
         val r = (activity.application as App).keyValStore.get(key, "")
-        // NOTE: ' are important as otherwise the json messes up
-        callJavaScriptFunction(FN_PREFIX + "loadFromDbCallback('" + requestId + "', '" + key + "', '" + r + "')")
+        callJavaScriptFunction(
+            FN_PREFIX + "loadFromDbCallback(" +
+                JSONObject.quote(requestId) + ", " +
+                JSONObject.quote(key) + ", " +
+                JSONObject.quote(r) + ")"
+        )
     }
 
     @Suppress("unused")
     @JavascriptInterface
     fun removeFromDb(requestId: String, key: String) {
         (activity.application as App).keyValStore.set(key, null)
-        callJavaScriptFunction(FN_PREFIX + "removeFromDbCallback('" + requestId + "')")
+        callJavaScriptFunction(FN_PREFIX + "removeFromDbCallback(" + JSONObject.quote(requestId) + ")")
     }
 
     @Suppress("unused")
     @JavascriptInterface
     fun clearDb(requestId: String) {
         (activity.application as App).keyValStore.clearAll(activity)
-        callJavaScriptFunction(FN_PREFIX + "clearDbCallback('" + requestId + "')")
-    }
-
-
-    // TODO: legacy remove in future version, but no the next release
-    @Suppress("unused")
-    @JavascriptInterface
-    fun saveToDb(key: String, value: String) {
-        (activity.application as App).keyValStore.set(key, value)
-        callJavaScriptFunction("window.saveToDbCallback()")
-    }
-
-    // TODO: legacy remove in future version, but no the next release
-    @Suppress("unused")
-    @JavascriptInterface
-    fun loadFromDb(key: String) {
-        val r = (activity.application as App).keyValStore.get(key, "")
-        // NOTE: ' are important as otherwise the json messes up
-        callJavaScriptFunction("window.loadFromDbCallback('$key', '$r')")
-    }
-
-
-    @Suppress("unused")
-    @JavascriptInterface
-    fun showNotificationIfAppIsNotOpen(title: String, body: String) {
-        if (!AppLifecycleObserver.getInstance().isInForeground) {
-            showNotification(title, body)
-        }
+        callJavaScriptFunction(FN_PREFIX + "clearDbCallback(" + JSONObject.quote(requestId) + ")")
     }
 
     @Suppress("unused")
     @JavascriptInterface
-    fun showNotification(title: String, body: String) {
-        Log.d("TW", "title $title")
-        Log.d("TW", "body $body")
-
-        val mBuilder: NotificationCompat.Builder = NotificationCompat.Builder(
-            activity.applicationContext, "SUP_CHANNEL_ID"
-        )
-        mBuilder.build().flags = mBuilder.build().flags or Notification.FLAG_AUTO_CANCEL
-
-        val ii = Intent(activity.applicationContext, FullscreenActivity::class.java)
-        val pendingIntentFlags: Int = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            PendingIntent.FLAG_MUTABLE
-        } else {
-            0
-        }
-        val pendingIntent = PendingIntent.getActivity(activity, 0, ii, pendingIntentFlags)
-
-        // Title
-        mBuilder.setContentTitle(title)
-        val bigText: NotificationCompat.BigTextStyle = NotificationCompat.BigTextStyle()
-        bigText.setBigContentTitle(title)
-
-        // Body
-        if (body.isNotEmpty() && body.trim() != "undefined") {
-            mBuilder.setContentText(body)
-            bigText.bigText(body)
-        }
-
-        mBuilder.setStyle(bigText)
-        mBuilder.setContentIntent(pendingIntent)
-        mBuilder.setSmallIcon(R.mipmap.ic_launcher)
-        mBuilder.setLargeIcon(
-            BitmapFactory.decodeResource(
-                activity.resources, R.mipmap.ic_launcher
-            )
-        )
-        mBuilder.setSmallIcon(R.drawable.ic_stat_sp)
-        mBuilder.priority = Notification.PRIORITY_MAX
-        mBuilder.setAutoCancel(true)
-
-        val mNotificationManager =
-            activity.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channelId = "SUP_CHANNEL_ID"
-            val channel = NotificationChannel(
-                channelId, "Super Productivity", NotificationManager.IMPORTANCE_HIGH
-            )
-            mNotificationManager.createNotificationChannel(channel)
-            mBuilder.setChannelId(channelId)
-        }
-        mNotificationManager.notify(0, mBuilder.build())
-    }
-
-    private fun readFully(inputStream: InputStream): ByteArray {
-        val buffer = ByteArrayOutputStream()
-        var nRead: Int
-        val data = ByteArray(16384)
-        nRead = inputStream.read(data, 0, data.size)
-        while (nRead != -1) {
-            buffer.write(data, 0, nRead)
-            nRead = inputStream.read(data, 0, data.size)
-        }
-        return buffer.toByteArray()
-    }
-
-    @Suppress("unused")
-    @JavascriptInterface
-    fun makeHttpRequest(
-        requestId: String,
-        urlString: String,
-        method: String,
-        data: String,
-        username: String,
-        password: String,
-        readResponse: String
-    ) {
-        Log.d("TW", "$requestId $urlString $method $data $username $readResponse")
-        var status: Int
-        var statusText: String
-        var resultData = ""
-        val headers = JSONObject()
-        val doInput = readResponse.toBoolean()
-        try {
-            val url = URL(urlString)
-            val connection = url.openConnection() as HttpURLConnection
-            if (username.isNotEmpty() && password.isNotEmpty()) {
-                val auth = "$username:$password"
-                val encodedAuth = Base64.encodeToString(auth.toByteArray(), Base64.NO_WRAP)
-                connection.setRequestProperty(/* key = */ "Authorization", /* value = */
-                    "Basic $encodedAuth"
-                )
+    fun triggerGetShareData() {
+        if (activity is com.superproductivity.superproductivity.CapacitorMainActivity) {
+            activity.runOnUiThread {
+                activity.flushPendingShareIntent()
             }
-            connection.requestMethod = method
-            connection.setRequestProperty("Content-Type", "application/octet-stream")
-            connection.doInput = doInput
-            if (data.isNotEmpty()) {
-                connection.doOutput = true
-                val bytes = data.toByteArray()
-                connection.setFixedLengthStreamingMode(bytes.size)
-                val out = BufferedOutputStream(connection.outputStream)
-                out.write(bytes)
-                out.flush()
-                out.close()
-            }
-            connection.headerFields.entries.forEach { entry ->
-                val output = entry.value.joinToString(separator = ", ")
+        }
+    }
 
-                // https://datatracker.ietf.org/doc/html/rfc7230#section-3.2.2
+    @Suppress("unused")
+    @JavascriptInterface
+    fun startTrackingService(taskId: String, taskTitle: String, timeSpentMs: Long) {
+        safeCall(
+            "Failed to start tracking service",
+            ForegroundServiceFailure.SERVICE_TRACKING
+        ) {
+            val intent = Intent(activity, TrackingForegroundService::class.java).apply {
+                action = TrackingForegroundService.ACTION_START
+                putExtra(TrackingForegroundService.EXTRA_TASK_ID, taskId)
+                putExtra(TrackingForegroundService.EXTRA_TASK_TITLE, taskTitle)
+                putExtra(TrackingForegroundService.EXTRA_TIME_SPENT, timeSpentMs)
+            }
+            TrackingForegroundService.markStartPending()
+            try {
+                ContextCompat.startForegroundService(activity, intent)
+            } catch (e: Exception) {
+                TrackingForegroundService.clearStartPending()
+                throw e
+            }
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun stopTrackingService() {
+        safeCall("Failed to stop tracking service") {
+            val intent = Intent(activity, TrackingForegroundService::class.java)
+            if (TrackingForegroundService.isStartPending || TrackingForegroundService.isTracking) {
+                // A startForegroundService() may still be promoting: stopping via
+                // stopService() now could tear it down before startForeground()
+                // runs and crash with ForegroundServiceDidNotStartInTimeException.
+                // Routing as ACTION_STOP through onStartCommand lets it promote
+                // first, then stop cleanly.
+                intent.action = TrackingForegroundService.ACTION_STOP
                 try {
-                    if (entry.key != null)
-                        headers.put(entry.key.lowercase(Locale.ROOT), output)
-                } catch (e: JSONException) {
-                    e.printStackTrace()
-                }
-            }
-            status = connection.responseCode
-            statusText = connection.responseMessage
-            val out: ByteArray
-            if (status in 200..299 && doInput) {
-                val inputStream = connection.inputStream
-                out = readFully(inputStream)
-                inputStream.close()
-            } else {
-                out = ByteArray(0)
-            }
-            connection.disconnect()
-            resultData = String(out, StandardCharsets.UTF_8)
-        } catch (e: MalformedURLException) {
-            e.printStackTrace()
-            status = -1
-            statusText = "Malformed URL"
-        } catch (e: SSLHandshakeException) {
-            e.printStackTrace()
-            var cause = e.cause
-            while (cause != null && cause !is CertPathValidatorException) {
-                cause = cause.cause
-            }
-            if (cause != null) {
-                val validationException = cause as CertPathValidatorException
-                val message = StringBuilder("Failed trust path:")
-                validationException.certPath.certificates.forEach { certificate ->
-                    message.append("\n")
-                    message.append(certificate.toString())
-                }
-                Log.e("TW", message.toString())
-            }
-            status = -2
-            statusText = "SSL Handshake Error"
-        } catch (e: IOException) {
-            e.printStackTrace()
-            status = -3
-            statusText = "Network Error"
-        } catch (e: ClassCastException) {
-            e.printStackTrace()
-            status = -4
-            statusText = "Unsupported Protocol"
-        }
-        val result = JSONObject()
-        try {
-            result.put("data", resultData)
-            result.put("status", status)
-            result.put("headers", headers)
-            result.put("statusText", statusText)
-        } catch (e: JSONException) {
-            e.printStackTrace()
-        }
-        Log.d("TW", "$requestId: $result")
-        callJavaScriptFunction(FN_PREFIX + "makeHttpRequestCallback('" + requestId + "', " + result + ")")
-    }
-
-    @Suppress("unused")
-    @JavascriptInterface
-    fun getFileRev(filePath: String): String {
-        Log.d("SuperProductivity", "getFileRev")
-        // Get folder path
-        val sp = activity.getPreferences(Context.MODE_PRIVATE)
-        val folderPath = sp.getString("filesyncFolder", "") ?: ""
-        // Build fullFilePath from folder path and filepath
-        val fullFilePath = "$folderPath/$filePath"
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Scoped storage permission management for Android 10+
-            // Load file
-            val file = DocumentFile.fromSingleUri(activity, Uri.parse(fullFilePath))
-            // Get last modified date
-            val lastModif = file?.lastModified().toString()
-            Log.d("SuperProductivity", "getFileRev lastModified: $lastModif")
-            lastModif
-        } else {
-            val file = File(fullFilePath)
-            // Get last modified date
-            val lastModif = file.lastModified().toString()
-            Log.d("SuperProductivity", "getFileRev lastModified: $lastModif")
-            lastModif
-        }
-    }
-
-    @Suppress("unused")
-    @JavascriptInterface
-    fun readFile(filePath: String): String {
-        // Read a file, most likely the filesync database
-        Log.d("SuperProductivity", "readFile")
-
-        // Get folder path
-        val sp = activity.getPreferences(Context.MODE_PRIVATE)
-        val folderPath = sp.getString("filesyncFolder", "") ?: ""
-        // Build fullFilePath from folder path and filepath
-        val fullFilePath = "$folderPath/$filePath"
-        Log.d(
-            "SuperProductivity",
-            "readFile: trying to read from fullFilePath: " + fullFilePath
-        )
-        // Open file in read only mode and an InputStream
-        // Make a reader pointing to the input file
-        val reader =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // Scoped storage permission management for Android 10+
-                val folder = DocumentFile.fromTreeUri(
-                    activity,
-                    Uri.parse(fullFilePath),
-                )
-                val file: DocumentFile? = folder?.findFile(filePath)
-                if (file != null) {
-                    activity.contentResolver.openInputStream(file.uri)?.reader()
-                } else {
-                    null
-                }
-            } else {
-                // Older versions of Android <= 9 don't need scoped storage management
-                try {
-                    BufferedReader(FileReader(fullFilePath))
-                } catch (e: Exception) {
-                    // File does not exist, that's normal if it's the first time, we simply return null
-                    null
-                }
-            }
-
-        // Use a StringBuilder to rebuild the input file's content but replace the line returns with current OS's line returns
-        val sb: String =
-            if (reader == null) {
-                Log.d(
-                    "SuperProductivity",
-                    "readFile warning: tried to open file, but file does not exist or we do not have permission! This may be normal if file does not exist yet, it will be created when some tasks will be added."
-                )
-                ""
-            } else {
-                // Read input file
-                try {
-                    reader.readText()
-                } catch (e: Exception) {
-                    Log.d("SuperProductivity", "readFile error: " + e.stackTraceToString())
-                    // Return an empty string if there is an error (maybe file does not exist yet)
-                    ""
-                } finally {
-                    reader.close()
-                }
-            }
-        // Return file's content
-        return sb
-    }
-
-    @Suppress("unused")
-    @JavascriptInterface
-    fun writeFile(filePath: String, data: String) {
-        Log.d("SuperProductivity", "writeFile: trying to save to filePath: $filePath")
-        // Get folder path
-        val sp = activity.getPreferences(Context.MODE_PRIVATE)
-        val folderPath = sp.getString("filesyncFolder", "") ?: ""
-
-        // Scoped storage permission management for Android 10+, but also works for Android < 10
-        // Open file with write access, using DocumentFile URI
-        val folder = DocumentFile.fromTreeUri(activity, Uri.parse(folderPath))
-        var file = folder?.findFile(filePath)
-        Log.d("SuperProductivity", "writeFile: trying to save to: $file")
-
-        if (file != null && file.exists()) {
-            // File exists, attempt to delete it
-            val deleted = file.delete()
-
-            if (!deleted) {
-                Log.e("SuperProductivity", "Failed to delete the existing file: $filePath")
-                return
-            } else {
-                Log.d("SuperProductivity", "File deleted: $filePath")
-            }
-        }
-
-        // File doesn't exist or was deleted successfully, so create it
-        file = folder?.createFile("application/json", filePath)
-
-        if (file != null) {
-            Log.d("SuperProductivity", "File created successfully: ${file.uri}")
-        } else {
-            Log.e("SuperProductivity", "Failed to create the file: $filePath")
-        }
-        // file = file?.recreateFile(activity)  // erase content first by recreating file. For some reason, DocumentFileCompat.fromFullPath(requiresWriteAccess=true) and openOutputStream(append=false) only open the file in append mode, so we need to recreate the file to truncate its content first
-        // Open a writer to an OutputStream to the file without append mode (so we write from the start of the file)
-        Log.d("SuperProductivity", "writeFile: try to openOutputStream")
-        val writer: Writer = file?.openOutputStream(activity, append = false)!!.writer()
-        try {
-            Log.d("SuperProductivity", "writeFile: try to write data into file: $data")
-            writer.write(data)
-            Log.d("SuperProductivity", "writeFile: write apparently successful!")
-        } catch (e: Exception) {
-            Log.d("SuperProductivity", "writeFile error: " + e.stackTraceToString())
-        } finally {
-            writer.close()
-        }
-    }
-
-    @Suppress("unused")
-    @JavascriptInterface
-    fun allowedFolderPath(): String {
-        val grantedUris = activity.contentResolver.persistedUriPermissions.map { it.uri }
-        Log.d("SuperProductivity", "allowedFolderPath grantedUris: " + grantedUris.toString())
-        val sp = activity.getPreferences(Context.MODE_PRIVATE)
-        val folderPath = sp.getString("filesyncFolder", "") ?: ""
-        Log.d("SuperProductivity", "allowedFolderPath filesyncFolder: $folderPath")
-
-        val pathGranted: Boolean =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                // If scoped storage, check if stored path is in the list of granted path, if true, then return it, else return an empty string
-                if (grantedUris.isEmpty() or folderPath.isEmpty()) {
-                    // list of granted paths is empty, then we have no permission
-                    false
-                } else {
-                    // otherwise we loop through each path in the granted paths list, and check if the currently selected folderPath is a subfolder of a granted path
-                    val vpaths: List<String> = grantedUris.map { it.toString() }
-                    Log.d("SuperProductivity", "allowedFolderPath flattened values: $vpaths")
-                    var innerCond: Boolean = false
-                    for (p in vpaths) {
-                        if (folderPath.contains(p)) { // granted path is always a root path and hence a parent path to a user selected folderPath
-                            innerCond = true
-                            break
-                        }
+                    activity.startService(intent)
+                } catch (e: IllegalStateException) {
+                    // App is in the background: startService() is disallowed here.
+                    // Only fall back to stopService() if no start is still pending
+                    // — stopping a not-yet-promoted service would re-trigger the
+                    // same crash. If a start IS pending, leave it: the pending
+                    // start promotes and a later foreground sync stops it cleanly.
+                    Log.d(TAG, "stopTrackingService: app backgrounded, falling back to stopService()", e)
+                    if (!TrackingForegroundService.isStartPending) {
+                        activity.stopService(Intent(activity, TrackingForegroundService::class.java))
                     }
-                    innerCond
                 }
             } else {
-                // For older versions of Android, check if we have access to any folder
-                val permissionRead = ContextCompat.checkSelfPermission(
-                    activity,
-                    Manifest.permission.READ_EXTERNAL_STORAGE
-                )
-                val permissionWrite = ContextCompat.checkSelfPermission(
-                    activity,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-                )
-
-                (permissionRead == PackageManager.PERMISSION_GRANTED) && (permissionWrite == PackageManager.PERMISSION_GRANTED)
+                activity.stopService(intent)
             }
-        Log.d(
-            "SuperProductivity",
-            "allowedFolderPath folderPath.isNotEmpty(): ${folderPath.isNotEmpty()} pathGranted: ${pathGranted.toString()}"
-        )
-        return if (folderPath.isNotEmpty() && pathGranted) {
-            folderPath
-        } else {
-            ""
         }
     }
 
     @Suppress("unused")
     @JavascriptInterface
-    fun isGrantedFilePermission(): Boolean = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        val grantedPaths = activity.contentResolver.persistedUriPermissions.map { it.uri }
-        Log.d(
-            "SuperProductivity",
-            "isGrantedFilePermission grantedPaths: " + grantedPaths.toString()
-        )
-        /*
-        val sp = activity.getPreferences(Context.MODE_PRIVATE)
-        val folderPath = sp.getString("filesyncFolder", "") ?: ""
-        Log.d("SuperProductivity", "isGrantedFilePermission filesyncFolder: $folderPath")
-        */
-        grantedPaths.isNotEmpty()
-    } else {
-        val result = ContextCompat.checkSelfPermission(
-            activity, Manifest.permission.READ_EXTERNAL_STORAGE
-        )
-        val result1 = ContextCompat.checkSelfPermission(
-            activity, Manifest.permission.WRITE_EXTERNAL_STORAGE
-        )
-        result == PackageManager.PERMISSION_GRANTED && result1 == PackageManager.PERMISSION_GRANTED
+    fun updateTrackingService(timeSpentMs: Long) {
+        safeCall("Failed to update tracking service") {
+            val intent = Intent(activity, TrackingForegroundService::class.java).apply {
+                action = TrackingForegroundService.ACTION_UPDATE
+                putExtra(TrackingForegroundService.EXTRA_TIME_SPENT, timeSpentMs)
+            }
+            activity.startService(intent)
+        }
     }
 
     @Suppress("unused")
     @JavascriptInterface
-    fun grantFilePermission(requestId: String) {
-        // For Android < 10, ask for permission to access the whole storage
-        /* DEPRECATED: if we use this to get the permissions, then we need to use another folder picker than SimpleStorage, because otherwise SimpleStorage also asks for permissions, but Android does not accept asking for two different set of permissions in a single call: "Can reqeust only one set of permissions at a time"
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            ActivityCompat.requestPermissions(
-                activity, arrayOf(
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
-                    Manifest.permission.READ_EXTERNAL_STORAGE
-                ), 1
+    fun getTrackingElapsed(): String {
+        val taskId = TrackingForegroundService.currentTaskId
+        val elapsedMs = TrackingForegroundService.getElapsedMs()
+        val isTracking = TrackingForegroundService.isTracking
+        return if (isTracking && taskId != null) {
+            """{"taskId":"$taskId","elapsedMs":$elapsedMs}"""
+        } else {
+            "null"
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun startFocusModeService(
+        title: String,
+        durationMs: Long,
+        remainingMs: Long,
+        isBreak: Boolean,
+        isPaused: Boolean,
+        taskTitle: String?
+    ) {
+        safeCall(
+            "Failed to start focus mode service",
+            ForegroundServiceFailure.SERVICE_FOCUS_MODE
+        ) {
+            val intent = Intent(activity, FocusModeForegroundService::class.java).apply {
+                action = FocusModeForegroundService.ACTION_START
+                putExtra(FocusModeForegroundService.EXTRA_TITLE, title)
+                putExtra(FocusModeForegroundService.EXTRA_TASK_TITLE, taskTitle)
+                putExtra(FocusModeForegroundService.EXTRA_DURATION_MS, durationMs)
+                putExtra(FocusModeForegroundService.EXTRA_REMAINING_MS, remainingMs)
+                putExtra(FocusModeForegroundService.EXTRA_IS_BREAK, isBreak)
+                putExtra(FocusModeForegroundService.EXTRA_IS_PAUSED, isPaused)
+            }
+            FocusModeForegroundService.markStartPending()
+            try {
+                ContextCompat.startForegroundService(activity, intent)
+            } catch (e: Exception) {
+                FocusModeForegroundService.clearStartPending()
+                throw e
+            }
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun stopFocusModeService() {
+        safeCall("Failed to stop focus mode service") {
+            val intent = Intent(activity, FocusModeForegroundService::class.java)
+            if (FocusModeForegroundService.isStartPending || FocusModeForegroundService.isRunning) {
+                // A startForegroundService() may still be promoting: stopping via
+                // stopService() now could tear it down before startForeground()
+                // runs and crash with ForegroundServiceDidNotStartInTimeException.
+                // Routing as ACTION_STOP through onStartCommand lets it promote
+                // first, then stop cleanly.
+                intent.action = FocusModeForegroundService.ACTION_STOP
+                try {
+                    activity.startService(intent)
+                } catch (e: IllegalStateException) {
+                    // App is in the background: startService() is disallowed here.
+                    // Only fall back to stopService() if no start is still pending
+                    // — stopping a not-yet-promoted service would re-trigger the
+                    // same crash. If a start IS pending, leave it: the pending
+                    // start promotes and a later foreground sync stops it cleanly.
+                    Log.d(TAG, "stopFocusModeService: app backgrounded, falling back to stopService()", e)
+                    if (!FocusModeForegroundService.isStartPending) {
+                        activity.stopService(Intent(activity, FocusModeForegroundService::class.java))
+                    }
+                }
+            } else {
+                activity.stopService(intent)
+            }
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun updateFocusModeService(title: String, remainingMs: Long, isPaused: Boolean, isBreak: Boolean, taskTitle: String?) {
+        safeCall("Failed to update focus mode service") {
+            val intent = Intent(activity, FocusModeForegroundService::class.java).apply {
+                action = FocusModeForegroundService.ACTION_UPDATE
+                putExtra(FocusModeForegroundService.EXTRA_TITLE, title)
+                putExtra(FocusModeForegroundService.EXTRA_REMAINING_MS, remainingMs)
+                putExtra(FocusModeForegroundService.EXTRA_IS_PAUSED, isPaused)
+                putExtra(FocusModeForegroundService.EXTRA_IS_BREAK, isBreak)
+                putExtra(FocusModeForegroundService.EXTRA_TASK_TITLE, taskTitle)
+            }
+            activity.startService(intent)
+        }
+    }
+
+    /**
+     * Read back the live focus-mode session so the WebView can recover it after
+     * being recreated (app reopened from recents). Returns "null" when no focus
+     * session is running. Intentionally omits the task title — no user content
+     * crosses the bridge here; the Angular store re-derives it (#7855).
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getFocusModeElapsed(): String {
+        return if (FocusModeForegroundService.isRunning) {
+            val durationMs = FocusModeForegroundService.durationMs
+            val remainingMs = FocusModeForegroundService.liveRemainingMs()
+            val isBreak = FocusModeForegroundService.isBreak
+            val isPaused = FocusModeForegroundService.isPaused
+            """{"durationMs":$durationMs,"remainingMs":$remainingMs,"isBreak":$isBreak,"isPaused":$isPaused}"""
+        } else {
+            "null"
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun scheduleNativeReminder(
+        notificationId: Int,
+        reminderId: String,
+        relatedId: String,
+        title: String,
+        reminderType: String,
+        triggerAtMs: Long,
+        useAlarmStyle: Boolean,
+        isOngoing: Boolean
+    ) {
+        safeCall("Failed to schedule native reminder") {
+            ReminderNotificationHelper.scheduleReminder(
+                activity,
+                notificationId,
+                reminderId,
+                relatedId,
+                title,
+                reminderType,
+                triggerAtMs,
+                useAlarmStyle,
+                isOngoing
             )
         }
-        */
-        // For Android >= 10, use scoped storage via SimpleStorage library to get the permission to write files in a folder
-        // For Android < 10, SimpleStorage serves as a simple folder path picker, so that we still save where the user want look for a database file
-        // Note that SimpleStorage takes care of all the gritty technical details, including whether the user must pick a root path BEFORE selecting the folder they want to store in, everything is explained to the user
-        Log.d("SuperProductivity", "Before SimpleStorageHelper callback func def")
-        // Register a callback with SimpleStorage when a folder is picked
-        storageHelper.onFolderSelected =
-            { requestCode, root -> // could also use simpleStorageHelper.onStorageAccessGranted()
-                Log.d("SuperProductivity", "Success Folder Pick! Now saving...")
-                // Get absolute path to folder
-                val fpath = root.uri.toString()
+    }
 
-                // Open preferences to save folder to path
-                val sp = activity.getPreferences(Context.MODE_PRIVATE)
-                sp.edit().putString("filesyncFolder", fpath).apply()
-                // Once permissions are granted, callback web application to continue execution
-                callJavaScriptFunction(
-                    FN_PREFIX + "grantFilePermissionCallBack('" + requestId + "')"
-                )
+    @Suppress("unused")
+    @JavascriptInterface
+    fun cancelNativeReminder(notificationId: Int) {
+        safeCall("Failed to cancel native reminder") {
+            ReminderNotificationHelper.cancelReminder(activity, notificationId)
+        }
+    }
+
+    /**
+     * Get queued tasks from the widget and clear the queue.
+     * Returns JSON string of tasks or null if empty.
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getWidgetTaskQueue(): String? {
+        return WidgetTaskQueue.getAndClearQueue(activity)
+    }
+
+    /**
+     * Get pending done-state changes from the home screen widget and clear the
+     * queue. Returns a JSON object string `{taskId: targetIsDone}` or null if empty.
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getWidgetDoneQueue(): String? {
+        return WidgetDoneQueue.getAndClear(activity)
+    }
+
+    /**
+     * Re-render the home screen widget from the current `widget_data` KeyValStore
+     * snapshot. Called by Angular after each snapshot push.
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun updateWidget() {
+        TaskListWidgetProvider.refreshAll(activity)
+    }
+
+    /**
+     * Pull-based retrieval of pending share data persisted in SharedPreferences.
+     * Clears both SharedPreferences and in-memory pendingShareIntent to prevent duplicates.
+     * @return JSON string of share data, or null if none pending
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getPendingShareData(): String? {
+        val data = ShareIntentQueue.getAndClear(activity)
+        if (activity is com.superproductivity.superproductivity.CapacitorMainActivity) {
+            activity.runOnUiThread {
+                activity.clearPendingShareIntent()
             }
-        // Open folder picker via SimpleStorage, this will request the necessary scoped storage permission
-        // Note that even though we get permissions, we need to only write DocumentFile files, not MediaStore files, because the latter are not meant to be reopened in the future so we can lose permission at anytime once they are written once, see: https://github.com/anggrayudi/SimpleStorage/issues/103
-        Log.d("SuperProductivity", "Get Storage Access permission")
-        storageHelper.openFolderPicker(
-            // We could also use simpleStorageHelper.requestStorageAccess()
-            initialPath = FileFullPath(
-                activity,
-                StorageId.PRIMARY,
-                "SupProd"
-            ), // SimpleStorage.externalStoragePath if we want to default to sdcard
-            // to force pick a specific folder and none others, use these arguments for simpleStorageHelper.requestStorageAccess():
-            //expectedStorageType = StorageType.EXTERNAL,
-            //expectedBasePath = "SupProd"
-        )
+        }
+        return data
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getReminderTapQueue(): String? {
+        return ReminderTapQueue.getAndClear(activity)
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getReminderDoneQueue(): String? {
+        return ReminderDoneQueue.getAndClear(activity)
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getReminderSnoozeQueue(): String? {
+        return ReminderSnoozeQueue.getAndClear(activity)
+    }
+
+    /**
+     * Phase 1: Get partial text from the startup overlay without hiding it.
+     * The native input stays visible so the user sees a seamless transition.
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getStartupOverlayPartialText(): String? {
+        var partialText: String? = null
+        if (activity is com.superproductivity.superproductivity.CapacitorMainActivity) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            activity.runOnUiThread {
+                partialText = activity.getStartupOverlayPartialText()
+                latch.countDown()
+            }
+            latch.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        }
+        return partialText
+    }
+
+    /**
+     * Phase 2: Hide the startup overlay after the web input is ready.
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun hideStartupOverlay() {
+        if (activity is com.superproductivity.superproductivity.CapacitorMainActivity) {
+            activity.runOnUiThread {
+                activity.hideStartupOverlay()
+            }
+        }
+    }
+
+    /**
+     * Dismiss startup overlay immediately (no partial text transfer).
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun dismissStartupOverlay() {
+        if (activity is com.superproductivity.superproductivity.CapacitorMainActivity) {
+            activity.runOnUiThread {
+                activity.dismissStartupOverlay()
+            }
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun setSuperSyncCredentials(baseUrl: String, accessToken: String) {
+        safeCall("Failed to set SuperSync credentials") {
+            BackgroundSyncCredentialStore.save(activity, baseUrl, accessToken)
+            SyncReminderScheduler.ensureScheduled(activity)
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun clearSuperSyncCredentials() {
+        safeCall("Failed to clear SuperSync credentials") {
+            BackgroundSyncCredentialStore.clear(activity)
+            SyncReminderScheduler.cancel(activity)
+        }
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun openAppNotificationSettings() {
+        safeCall("Failed to open notification settings") {
+            val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, activity.packageName)
+                }
+            } else {
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:${activity.packageName}")
+                }
+            }
+            activity.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
     }
 
     fun callJavaScriptFunction(script: String) {
@@ -611,6 +522,7 @@ class JavaScriptInterface(
     }
 
     companion object {
+        private const val TAG = "JavaScriptInterface"
         // TODO rename to WINDOW_PROPERTY
         const val FN_PREFIX: String = "window.$WINDOW_INTERFACE_PROPERTY."
     }

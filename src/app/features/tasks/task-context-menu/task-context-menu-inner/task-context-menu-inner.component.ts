@@ -2,15 +2,18 @@ import {
   AfterViewInit,
   ChangeDetectionStrategy,
   Component,
+  computed,
   ElementRef,
   inject,
   input,
   Input,
+  OnDestroy,
   output,
   viewChild,
   ViewEncapsulation,
 } from '@angular/core';
-import { AsyncPipe, DatePipe } from '@angular/common';
+import { AsyncPipe } from '@angular/common';
+import { LocaleDatePipe } from 'src/app/ui/pipes/locale-date.pipe';
 import { MatIcon } from '@angular/material/icon';
 import {
   MatMenu,
@@ -18,8 +21,10 @@ import {
   MatMenuItem,
   MatMenuTrigger,
 } from '@angular/material/menu';
-import { Task, TaskCopy, TaskReminderOptionId, TaskWithSubTasks } from '../../task.model';
-import { EMPTY, forkJoin, Observable, of, ReplaySubject, Subject } from 'rxjs';
+import { MatDivider } from '@angular/material/divider';
+import { ESTIMATE_OPTIONS } from '../../add-task-bar/add-task-bar.const';
+import { Task, TaskCopy, TaskWithSubTasks } from '../../task.model';
+import { EMPTY, forkJoin, from, Observable, of, ReplaySubject, Subject } from 'rxjs';
 import {
   concatMap,
   delay,
@@ -36,37 +41,48 @@ import { TaskService } from '../../task.service';
 import { TaskRepeatCfgService } from '../../../task-repeat-cfg/task-repeat-cfg.service';
 import { MatDialog } from '@angular/material/dialog';
 import { IssueService } from '../../../issue/issue.service';
-import { TaskAttachmentService } from '../../task-attachment/task-attachment.service';
 import { SnackService } from '../../../../core/snack/snack.service';
 import { ProjectService } from '../../../project/project.service';
+import { _MISSING_PROJECT_, DEFAULT_PROJECT_ICON } from '../../../project/project.const';
 import { WorkContextService } from '../../../work-context/work-context.service';
 import { GlobalConfigService } from '../../../config/global-config.service';
-import { KeyboardConfig } from '../../../config/keyboard-config.model';
+import { KeyboardConfig } from '@sp/keyboard-config';
 import { DialogScheduleTaskComponent } from '../../../planner/dialog-schedule-task/dialog-schedule-task.component';
+import { DialogDeadlineComponent } from '../../dialog-deadline/dialog-deadline.component';
 import { DialogTimeEstimateComponent } from '../../dialog-time-estimate/dialog-time-estimate.component';
-import { DialogEditTaskAttachmentComponent } from '../../task-attachment/dialog-edit-attachment/dialog-edit-task-attachment.component';
-import { throttle } from 'helpful-decorators';
-import { DialogEditTagsForTaskComponent } from '../../../tag/dialog-edit-tags/dialog-edit-tags-for-task.component';
-import { TODAY_TAG } from '../../../tag/tag.const';
+import { throttle } from '../../../../util/decorators';
 import { DialogConfirmComponent } from '../../../../ui/dialog-confirm/dialog-confirm.component';
 import { Update } from '@ngrx/entity';
-import { IS_TOUCH_PRIMARY } from 'src/app/util/is-mouse-primary';
+import { isTouchActive } from 'src/app/util/input-intent';
 import { T } from 'src/app/t.const';
-import { TranslateModule } from '@ngx-translate/core';
+import { TranslateModule, TranslateService } from '@ngx-translate/core';
 import { Store } from '@ngrx/store';
 import { selectTaskByIdWithSubTaskData } from '../../store/task.selectors';
 import { MatIconButton } from '@angular/material/button';
 import { MatTooltip } from '@angular/material/tooltip';
-import { getWorklogStr } from '../../../../util/get-work-log-str';
+import { getDbDateStr } from '../../../../util/get-db-date-str';
 import { PlannerActions } from '../../../planner/store/planner.actions';
+import { addSubTask } from '../../../tasks/store/task.actions';
 import { combineDateAndTime } from '../../../../util/combine-date-and-time';
-import { isToday } from '../../../../util/is-today.util';
+import { getNextWeekDayOffset } from '../../../../util/get-next-week-day-offset';
 import { DateAdapter } from '@angular/material/core';
-import { isShowAddToToday, isShowRemoveFromToday } from '../../util/is-task-today';
 import { ICAL_TYPE } from '../../../issue/issue.const';
-import { PlannerService } from '../../../planner/planner.service';
 import { IssueIconPipe } from '../../../issue/issue-icon/issue-icon.pipe';
 import { showFocusOverlay } from '../../../focus-mode/store/focus-mode.actions';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { TagService } from '../../../tag/tag.service';
+import { DialogPromptComponent } from '../../../../ui/dialog-prompt/dialog-prompt.component';
+import { TaskSharedActions } from '../../../../root-store/meta/task-shared.actions';
+import { selectTodayTaskIds } from '../../../work-context/store/work-context.selectors';
+import { DateService } from '../../../../core/date/date.service';
+import { MenuTouchFixDirective } from '../menu-touch-fix.directive';
+import { TaskLog } from '../../../../core/log';
+import { isTouchEventInstance } from '../../../../util/is-touch-event.util';
+import { TaskFocusService } from '../../task-focus.service';
+import { DEFAULT_GLOBAL_CONFIG } from 'src/app/features/config/default-global-config.const';
+import { MenuTreeService } from '../../../menu-tree/menu-tree.service';
+import { SelectOptionRowComponent } from '../../../../ui/select-option-row/select-option-row.component';
+import { AddSubtaskInputService } from '../../add-subtask-input/add-subtask-input.service';
 
 @Component({
   selector: 'task-context-menu-inner',
@@ -76,37 +92,56 @@ import { showFocusOverlay } from '../../../focus-mode/store/focus-mode.actions';
     MatMenu,
     MatMenuContent,
     MatMenuItem,
+    MatDivider,
     TranslateModule,
     MatMenuTrigger,
     MatIconButton,
     MatTooltip,
     IssueIconPipe,
+    MenuTouchFixDirective,
+    SelectOptionRowComponent,
   ],
   templateUrl: './task-context-menu-inner.component.html',
   styleUrl: './task-context-menu-inner.component.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
   encapsulation: ViewEncapsulation.Emulated,
 })
-export class TaskContextMenuInnerComponent implements AfterViewInit {
-  private _datePipe = inject(DatePipe);
+export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
+  private readonly _datePipe = inject(LocaleDatePipe);
   private readonly _taskService = inject(TaskService);
   private readonly _taskRepeatCfgService = inject(TaskRepeatCfgService);
   private readonly _matDialog = inject(MatDialog);
   private readonly _issueService = inject(IssueService);
-  private readonly _attachmentService = inject(TaskAttachmentService);
   private readonly _elementRef = inject(ElementRef);
   private readonly _snackService = inject(SnackService);
   private readonly _projectService = inject(ProjectService);
-  readonly workContextService = inject(WorkContextService);
   private readonly _globalConfigService = inject(GlobalConfigService);
   private readonly _store = inject(Store);
-  private readonly _dateAdapter = inject<DateAdapter<unknown>>(DateAdapter);
-  private readonly _plannerService = inject(PlannerService);
+  private readonly _dateAdapter = inject(DateAdapter);
+  private readonly _tagService = inject(TagService);
+  private readonly _translateService = inject(TranslateService);
+  private readonly _workContextService = inject(WorkContextService);
+  private readonly _taskFocusService = inject(TaskFocusService);
+  private readonly _dateService = inject(DateService);
+  private readonly _menuTreeService = inject(MenuTreeService);
+  private readonly _addSubtaskInputService = inject(AddSubtaskInputService);
 
-  protected readonly IS_TOUCH_PRIMARY = IS_TOUCH_PRIMARY;
+  protected readonly isTouchActive = isTouchActive;
   protected readonly T = T;
+  readonly ESTIMATE_OPTIONS = ESTIMATE_OPTIONS;
+  readonly DEFAULT_PROJECT_ICON = DEFAULT_PROJECT_ICON;
 
   isAdvancedControls = input<boolean>(false);
+  todayList = toSignal(this._store.select(selectTodayTaskIds), { initialValue: [] });
+  isOnTodayList = computed(() => this.task && this.todayList().includes(this.task.id));
+  readonly isTimeTrackingEnabled = computed(
+    () => this._globalConfigService.appFeatures().isTimeTrackingEnabled,
+  );
+  readonly isFocusModeEnabled = computed(
+    () => this._globalConfigService.appFeatures().isFocusModeEnabled,
+  );
+
+  // eslint-disable-next-line @angular-eslint/no-output-native
   close = output();
 
   contextMenuPosition: { x: string; y: string } = { x: '100px', y: '100px' };
@@ -119,7 +154,6 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
 
   task!: TaskWithSubTasks | Task;
 
-  isTodayTag: boolean = false;
   isCurrent: boolean = false;
   isBacklog: boolean = false;
 
@@ -127,7 +161,7 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
   issueUrl$: Observable<string | null> = this._task$.pipe(
     switchMap((v) => {
       return v.issueType && v.issueId && v.issueProviderId
-        ? this._issueService.issueLink$(v.issueType, v.issueId, v.issueProviderId)
+        ? from(this._issueService.issueLink(v.issueType, v.issueId, v.issueProviderId))
         : of(null);
     }),
     take(1),
@@ -135,18 +169,16 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
   moveToProjectList$: Observable<Project[]> = this._task$.pipe(
     map((t) => t.projectId),
     distinctUntilChanged(),
-    switchMap((pid) => this._projectService.getProjectsWithoutId$(pid)),
+    switchMap((pid) =>
+      this._projectService.getProjectsWithoutIdInTreeOrder$(pid || null),
+    ),
   );
+  toggleTagList = this._tagService.tagsNoMyDayAndNoListInTreeOrder;
+  projectFolderMap = computed(() => this._menuTreeService.projectFolderMap());
+  tagFolderMap = computed(() => this._menuTreeService.tagFolderMap());
 
-  // isShowMoveFromAndToBacklogBtns$: Observable<boolean> = this._task$.pipe(
-  //   take(1),
-  //   switchMap((task) =>
-  //     task.projectId ? this._projectService.getByIdOnce$(task.projectId) : EMPTY,
-  //   ),
-  //   map((project) => project.isEnableBacklog),
-  // );
   isShowMoveFromAndToBacklogBtns$: Observable<boolean> =
-    this.workContextService.activeWorkContext$.pipe(
+    this._workContextService.activeWorkContext$.pipe(
       take(1),
       map((ctx) => !!ctx.isEnableBacklog),
     );
@@ -154,13 +186,18 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
   private _destroy$: Subject<boolean> = new Subject<boolean>();
   private _isTaskDeleteTriggered: boolean = false;
   private _isOpenedFromKeyboard = false;
+  private _restoreFocusTo?: HTMLElement;
+  private _touchMenuTimeout: ReturnType<typeof setTimeout> | undefined;
+  private _touchMenuRafId: number | undefined;
+  private readonly _closeContextMenu = (): void => {
+    this.contextMenuTrigger()?.closeMenu();
+  };
 
   // TODO: Skipped for migration because:
   //  Accessor inputs cannot be migrated as they are too complex.
   @Input('task') set taskSet(v: TaskWithSubTasks | Task) {
     this.task = v;
-    this.isTodayTag = v.tagIds.includes(TODAY_TAG.id);
-    this.isCurrent = this._taskService.currentTaskId === v.id;
+    this.isCurrent = this._taskService.currentTaskId() === v.id;
     this._task$.next(v);
   }
 
@@ -174,37 +211,153 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
     });
   }
 
-  open(ev: MouseEvent | KeyboardEvent | TouchEvent, isOpenedFromKeyBoard = false): void {
-    ev.preventDefault();
-    ev.stopPropagation();
-    ev.stopImmediatePropagation();
+  ngOnDestroy(): void {
+    this._clearActiveContextMenu();
+    this._destroy$.next(true);
+    this._destroy$.complete();
+    if (this._touchMenuTimeout !== undefined) {
+      clearTimeout(this._touchMenuTimeout);
+    }
+    if (this._touchMenuRafId !== undefined) {
+      cancelAnimationFrame(this._touchMenuRafId);
+    }
+  }
 
-    if (ev instanceof MouseEvent || ev instanceof TouchEvent) {
-      this.contextMenuPosition.x =
-        ('touches' in ev ? ev.touches[0].clientX : ev.clientX) + 10 + 'px';
-      this.contextMenuPosition.y =
-        ('touches' in ev ? ev.touches[0].clientY : ev.clientY) - 48 + 'px';
+  open(
+    ev?: MouseEvent | KeyboardEvent | TouchEvent,
+    isOpenedFromKeyBoard = false,
+    restoreFocusTo?: HTMLElement,
+  ): void {
+    this._restoreFocusTo = restoreFocusTo;
+
+    if (ev) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+
+      if (!isTouchActive() && (ev instanceof MouseEvent || isTouchEventInstance(ev))) {
+        const clientX = 'touches' in ev ? ev.touches[0].clientX : ev.clientX;
+        const clientY = 'touches' in ev ? ev.touches[0].clientY : ev.clientY;
+        this.contextMenuPosition.x = clientX + 10 + 'px';
+        const rawY = clientY - 48;
+        const safeAreaTop =
+          parseInt(
+            getComputedStyle(document.documentElement).getPropertyValue(
+              '--safe-area-inset-top',
+            ),
+            10,
+          ) || 0;
+        this.contextMenuPosition.y = Math.max(rawY, safeAreaTop) + 'px';
+      }
     }
 
     this._isOpenedFromKeyboard = isOpenedFromKeyBoard;
     this.contextMenuTrigger()?.openMenu();
+    this._taskFocusService.isTaskContextMenuOpen.set(true);
+    this._taskFocusService.closeActiveTaskContextMenu.set(this._closeContextMenu);
+
+    if (isTouchActive()) {
+      this._touchMenuTimeout = setTimeout(() => {
+        const boxes = document.querySelectorAll(
+          '.cdk-overlay-connected-position-bounding-box',
+        );
+        const boundingBox = boxes[boxes.length - 1] as HTMLElement | undefined;
+        if (!boundingBox) {
+          return;
+        }
+        // Layout only — CDK backdrop handles scrim + click-to-close
+        // pointer-events: none so taps pass through to the backdrop sibling
+        boundingBox.style.position = 'fixed';
+        boundingBox.style.inset = '0';
+        boundingBox.style.width = '';
+        boundingBox.style.height = '';
+        boundingBox.style.display = 'flex';
+        boundingBox.style.justifyContent = 'center';
+        boundingBox.style.alignItems = 'flex-end';
+        boundingBox.style.pointerEvents = 'none';
+
+        const pane = boundingBox.querySelector('.cdk-overlay-pane') as HTMLElement;
+        if (pane) {
+          pane.style.position = 'static';
+          pane.style.width = '100%';
+          pane.style.display = 'flex';
+          pane.style.justifyContent = 'center';
+          pane.style.pointerEvents = 'none';
+        }
+
+        const menuPanel = boundingBox.querySelector('.mat-mdc-menu-panel') as HTMLElement;
+        if (menuPanel) {
+          // Re-enable pointer events on the menu panel itself
+          menuPanel.style.pointerEvents = 'auto';
+          menuPanel.style.maxWidth = '300px';
+          menuPanel.style.width = '100%';
+          menuPanel.style.borderRadius =
+            'var(--card-border-radius) var(--card-border-radius) 0 0';
+          menuPanel.style.maxHeight = '80vh';
+          menuPanel.style.animation = 'none';
+          menuPanel.style.transform = 'translateY(24px)';
+          menuPanel.style.opacity = '0';
+          void menuPanel.offsetHeight;
+          menuPanel.style.transition =
+            'transform 250ms cubic-bezier(0.2, 0, 0, 1), opacity 150ms ease-out';
+          this._touchMenuRafId = requestAnimationFrame(() => {
+            menuPanel.style.transform = 'translateY(0)';
+            menuPanel.style.opacity = '1';
+          });
+        }
+      });
+      this._highlightSourceTask();
+    }
   }
 
   focusRelatedTaskOrNext(): void {
-    // NOTE: not active for now
-    // this.focusTaskOrNextAfter.emit();
+    const restoreFocusTo = this._restoreFocusTo;
+    this._restoreFocusTo = undefined;
+
+    // Focus the task element after context menu closes
+    // Use setTimeout to ensure menu has fully closed and DOM is settled
+    setTimeout(() => {
+      if (restoreFocusTo?.isConnected) {
+        restoreFocusTo.focus({ preventScroll: true });
+        return;
+      }
+
+      const taskElement = document.getElementById(`t-${this.task.id}`);
+      if (taskElement) {
+        // Restore focus to the acted-on task (keyboard continuity) WITHOUT
+        // scrolling: an action that relocates the task (e.g. Overdue -> Today)
+        // would otherwise yank the viewport to the moved task's new position,
+        // breaking "schedule several in a row" triage. The user acted at their
+        // current scroll position, so keep them anchored there. See issue #8533.
+        taskElement.focus({ preventScroll: true });
+        // Ensure focusedTaskId is set even if focus event doesn't fire
+        this._taskFocusService.focusedTaskId.set(this.task.id);
+      }
+    }, 0);
   }
 
   onClose(): void {
+    // Don't manually set focusedTaskId to null here - let the task component's
+    // focus/blur handlers manage it automatically to avoid race conditions
+    this._clearActiveContextMenu();
     this.focusRelatedTaskOrNext();
     this.close.emit();
   }
 
+  private _clearActiveContextMenu(): void {
+    if (this._taskFocusService.closeActiveTaskContextMenu() !== this._closeContextMenu) {
+      return;
+    }
+
+    this._taskFocusService.closeActiveTaskContextMenu.set(null);
+    this._taskFocusService.isTaskContextMenuOpen.set(false);
+  }
+
   get kb(): KeyboardConfig {
-    if (IS_TOUCH_PRIMARY || !this.isAdvancedControls()) {
+    if (isTouchActive() || !this.isAdvancedControls()) {
       return {} as any;
     }
-    return (this._globalConfigService.cfg?.keyboard as KeyboardConfig) || {};
+    return (this._globalConfigService.cfg()?.keyboard as KeyboardConfig) || {};
   }
 
   quickAccessKeydown(ev: KeyboardEvent): void {
@@ -212,7 +365,6 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
     const btns = Array.from(
       t?.closest('.quick-access')?.querySelectorAll('button') || [],
     );
-    //   const btns = Array.from(t?.querySelectorAll('button') || []);
 
     const currentIndex = btns.indexOf(t as HTMLButtonElement);
 
@@ -228,8 +380,12 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
     t?.parentElement?.querySelector('button')?.focus();
   }
 
+  focusFirstSubmenuItem(menu: MatMenu): void {
+    menu.focusFirstItem('program');
+  }
+
   goToFocusMode(): void {
-    this._taskService.setSelectedId(this.task.id);
+    this._taskService.setCurrentId(this.task.id);
     this._store.dispatch(showFocusOverlay());
   }
 
@@ -247,30 +403,63 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
       });
   }
 
+  openDeadlineDialog(): void {
+    this._matDialog
+      .open(DialogDeadlineComponent, {
+        autoFocus: false,
+        data: { task: this.task },
+      })
+      .afterClosed()
+      .subscribe(() => {
+        this.focusRelatedTaskOrNext();
+      });
+  }
+
+  removeDeadline(): void {
+    this._store.dispatch(
+      TaskSharedActions.removeDeadline({
+        taskId: this.task.id,
+      }),
+    );
+  }
+
   updateIssueData(): void {
     this._issueService.refreshIssueTask(this.task, true, true);
   }
-
-  // editTaskRepeatCfg(): void {
-  //   this._matDialog
-  //     .open(DialogEditTaskRepeatCfgComponent, {
-  //       data: {
-  //         task: this.task,
-  //       },
-  //     })
-  //     .afterClosed()
-  //     .pipe(takeUntil(this._destroy$))
-  //     .subscribe(() => this.focusSelf());
-  // }
 
   async deleteTask(): Promise<void> {
     // NOTE: prevents attempts to delete the same task multiple times
     if (this._isTaskDeleteTriggered) {
       return;
     }
+
+    const isConfirmBeforeDelete =
+      this._globalConfigService.cfg()?.tasks?.isConfirmBeforeDelete ?? true;
+
+    if (isConfirmBeforeDelete) {
+      this._matDialog
+        .open(DialogConfirmComponent, {
+          data: {
+            okTxt: T.F.TASK.D_CONFIRM_DELETE.OK,
+            message: T.F.TASK.D_CONFIRM_DELETE.MSG,
+            translateParams: { title: this.task.title },
+          },
+        })
+        .afterClosed()
+        .subscribe(async (isConfirm) => {
+          if (isConfirm) {
+            await this._performDelete();
+          }
+        });
+    } else {
+      await this._performDelete();
+    }
+  }
+
+  private async _performDelete(): Promise<void> {
+    this._isTaskDeleteTriggered = true;
     const taskWithSubTasks = await this._getTaskWithSubtasks();
     this._taskService.remove(taskWithSubTasks);
-    this._isTaskDeleteTriggered = true;
   }
 
   startTask(): void {
@@ -285,30 +474,65 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
     this._matDialog
       .open(DialogTimeEstimateComponent, {
         data: { task: this.task },
-        autoFocus: !IS_TOUCH_PRIMARY,
       })
       .afterClosed()
-      .pipe(takeUntil(this._destroy$))
       .subscribe(() => this.focusRelatedTaskOrNext());
   }
 
-  addAttachment(): void {
-    this._matDialog
-      .open(DialogEditTaskAttachmentComponent, {
-        data: {},
-      })
-      .afterClosed()
-      .pipe(takeUntil(this._destroy$))
-      .subscribe((result) => {
-        if (result) {
-          this._attachmentService.addAttachment(this.task.id, result);
-        }
-        this.focusRelatedTaskOrNext();
-      });
+  setEstimate(ms: number): void {
+    if (ms === this.task.timeEstimate) {
+      return;
+    }
+    this._taskService.update(this.task.id, { timeEstimate: ms });
   }
 
   addSubTask(): void {
-    this._taskService.addSubTaskTo(this.task.parentId || this.task.id);
+    this._addSubtaskInputService.requestOpen(this.task.parentId || this.task.id);
+  }
+
+  async duplicate(): Promise<void> {
+    const taskData = {
+      isDone: false,
+      projectId: this.task.projectId || undefined,
+      tagIds: this.task.tagIds || [],
+      ...(this.task.notes && { notes: this.task.notes }),
+    };
+    const timeData = {
+      ...(this.task.dueDay && { dueDay: this.task.dueDay }),
+      ...(this.task.dueWithTime && { dueWithTime: this.task.dueWithTime }),
+      ...(this.task.timeEstimate && { timeEstimate: this.task.timeEstimate }),
+    };
+    const taskId = this._taskService.add(
+      `${this.task.title} (copy)`,
+      false,
+      { ...taskData, ...timeData },
+      false,
+    );
+    if (this.task.subTaskIds.length) {
+      const taskWithSubtasks = await this._getTaskWithSubtasks();
+      for (const subTask of taskWithSubtasks.subTasks) {
+        const subTaskInfo = {
+          isDone: subTask.isDone,
+          projectId: subTask.projectId,
+          timeEstimate: subTask.timeEstimate,
+          notes: subTask.notes,
+        };
+        const subTaskObj = this._taskService.createNewTaskWithDefaults({
+          title: subTask.title,
+          additional: subTaskInfo,
+        });
+        this._store.dispatch(
+          addSubTask({
+            task: subTaskObj,
+            parentId: taskId,
+          }),
+        );
+      }
+    }
+  }
+
+  moveToTop(): void {
+    this._taskService.moveToTop(this.task.id, this.task.parentId, false);
   }
 
   @throttle(200, { leading: true, trailing: false })
@@ -324,24 +548,24 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
     }
   }
 
-  async editTags(): Promise<void> {
-    this._matDialog
-      .open(DialogEditTagsForTaskComponent, {
-        data: {
-          task: this.task,
-        },
-      })
-      .afterClosed()
-      .pipe(takeUntil(this._destroy$))
-      .subscribe(() => this.focusRelatedTaskOrNext());
-  }
-
   addToMyDay(): void {
-    this._taskService.addTodayTag(this.task);
+    this._store.dispatch(
+      TaskSharedActions.planTasksForToday({
+        taskIds: [this.task.id],
+        today: this._dateService.todayStr(),
+        startOfNextDayDiffMs: this._dateService.getStartOfNextDayDiffMs(),
+        parentTaskMap: { [this.task.id]: this.task.parentId },
+        isShowSnack: true,
+      }),
+    );
   }
 
-  removeFromMyDay(): void {
-    this.onTagsUpdated(this.task.tagIds.filter((tagId) => tagId !== TODAY_TAG.id));
+  unschedule(): void {
+    this._store.dispatch(
+      TaskSharedActions.unscheduleTask({
+        id: this.task.id,
+      }),
+    );
   }
 
   convertToMainTask(): void {
@@ -352,6 +576,34 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
     this._taskService.updateTags(this.task, tagIds);
   }
 
+  toggleTag(tagId: string): void {
+    const task = this.task;
+    const tagIds = task.tagIds.includes(tagId)
+      ? task.tagIds.filter((id) => id !== tagId)
+      : [...task.tagIds, tagId];
+
+    this.onTagsUpdated(tagIds);
+  }
+
+  openAddNewTag(): void {
+    this._matDialog
+      .open(DialogPromptComponent, {
+        data: {
+          placeholder: T.F.TAG.TTL.ADD_NEW_TAG,
+        },
+      })
+      .afterClosed()
+      .subscribe((val) => {
+        if (val) {
+          const t = this.task;
+          const newTagId = this._tagService.addTag({
+            title: val,
+          });
+          this._taskService.updateTags(t, [...t.tagIds, newTagId]);
+        }
+      });
+  }
+
   // TODO move to service
   async moveTaskToProject(projectId: string): Promise<void> {
     if (projectId === this.task.projectId) {
@@ -359,12 +611,13 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
     } else if (!this.task.repeatCfgId) {
       const taskWithSubTasks = await this._getTaskWithSubtasks();
       this._taskService.moveToProject(taskWithSubTasks, projectId);
+      this.onClose();
     } else {
       const taskWithSubTasks = await this._getTaskWithSubtasks();
 
       forkJoin([
         this._taskRepeatCfgService
-          .getTaskRepeatCfgById$(this.task.repeatCfgId)
+          .getTaskRepeatCfgByIdAllowUndefined$(this.task.repeatCfgId)
           .pipe(first()),
         this._taskService
           .getTasksWithSubTasksByRepeatCfgId$(this.task.repeatCfgId)
@@ -380,11 +633,20 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
               archiveInstances,
               targetProject,
             ]) => {
-              console.log({
+              TaskLog.log({
                 reminderCfg,
                 nonArchiveInstancesWithSubTasks,
                 archiveInstances,
               });
+
+              // Repeat config was deleted (e.g. via cross-client sync) but the task
+              // still references it — treat it as a plain task move instead of
+              // crashing on the missing config. (#8715)
+              if (!reminderCfg) {
+                this._taskService.moveToProject(taskWithSubTasks, projectId);
+                this.onClose();
+                return EMPTY;
+              }
 
               // if there is only a single instance (probably just created) than directly update the task repeat cfg
               if (
@@ -395,6 +657,7 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
                   projectId,
                 });
                 this._taskService.moveToProject(taskWithSubTasks, projectId);
+                this.onClose();
                 return EMPTY;
               }
 
@@ -404,7 +667,7 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
                     okTxt: T.F.TASK_REPEAT.D_CONFIRM_MOVE_TO_PROJECT.OK,
                     message: T.F.TASK_REPEAT.D_CONFIRM_MOVE_TO_PROJECT.MSG,
                     translateParams: {
-                      projectName: targetProject.title,
+                      projectName: targetProject?.title ?? _MISSING_PROJECT_,
                       tasksNr:
                         nonArchiveInstancesWithSubTasks.length + archiveInstances.length,
                     },
@@ -443,28 +706,41 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
             },
           ),
         )
-        .subscribe(() => this.focusRelatedTaskOrNext());
+        .subscribe(() => this.onClose());
     }
   }
 
   moveToBacklog(): void {
     if (this.task.projectId && !this.task.parentId) {
+      // Moving to the backlog is a list-position change only; it must not
+      // alter the task's schedule (#8592).
       this._projectService.moveTaskToBacklog(this.task.id, this.task.projectId);
-      if (this.task.tagIds.includes(TODAY_TAG.id)) {
-        this.removeFromMyDay();
-      }
     }
   }
 
   moveToToday(): void {
     if (this.task.projectId && !this.task.parentId) {
+      // Moving to the regular list is a list-position change only; it must not
+      // schedule the task for today (#8592).
       this._projectService.moveTaskToTodayList(this.task.id, this.task.projectId);
-      this.addToMyDay();
     }
   }
 
   trackByProjectId(i: number, project: Project): string {
     return project.id;
+  }
+
+  private _highlightSourceTask(): void {
+    const taskEl = document.getElementById(`t-${this.task.id}`);
+    if (!taskEl) {
+      return;
+    }
+    taskEl.classList.add('context-menu-highlight');
+    this.contextMenu()
+      ?.closed.pipe(takeUntil(this._destroy$), first())
+      .subscribe(() => {
+        taskEl.classList.remove('context-menu-highlight');
+      });
   }
 
   private async _getTaskWithSubtasks(): Promise<TaskWithSubTasks> {
@@ -482,9 +758,6 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
     const tDate = new Date();
     tDate.setMinutes(0, 0, 0);
     switch (item) {
-      case 0:
-        this._schedule(tDate, this.isShowRemoveFromToday());
-        break;
       case 1:
         this._schedule(tDate);
         break;
@@ -495,87 +768,78 @@ export class TaskContextMenuInnerComponent implements AfterViewInit {
         break;
       case 3:
         const nextFirstDayOfWeek = tDate;
-        const dayOffset =
-          (this._dateAdapter.getFirstDayOfWeek() -
-            this._dateAdapter.getDayOfWeek(nextFirstDayOfWeek) +
-            7) %
-            7 || 7;
+        const dayOffset = getNextWeekDayOffset(this._dateAdapter, nextFirstDayOfWeek);
         nextFirstDayOfWeek.setDate(nextFirstDayOfWeek.getDate() + dayOffset);
         this._schedule(nextFirstDayOfWeek);
         break;
-      // case 4:
-      //   const nextMonth = tDate;
-      //   nextMonth.setMonth(nextMonth.getMonth() + 1);
-      //   this._schedule(nextMonth);
-      //   break;
     }
   }
 
   private async _schedule(selectedDate: Date, isRemoveFromToday = false): Promise<void> {
     if (!selectedDate) {
-      console.warn('no selected date');
+      TaskLog.err('no selected date');
       return;
     }
 
     const newDayDate = new Date(selectedDate);
-    const newDay = getWorklogStr(newDayDate);
-    const formattedDate = this._datePipe.transform(newDay, 'shortDate') as string;
+    const newDay = getDbDateStr(newDayDate);
+
+    // If task is already scheduled for today with time and we're planning for today,
+    // just add to my day (which clears the reminder) instead of rescheduling
+    if (
+      this.task.dueWithTime &&
+      this._dateService.isToday(this.task.dueWithTime) &&
+      newDay === this._dateService.todayStr()
+    ) {
+      this.addToMyDay();
+      return;
+    }
 
     if (isRemoveFromToday) {
-      this.removeFromMyDay();
-    } else if (this.task.plannedAt) {
+      this.unschedule();
+    } else if (this.task.dueDay === newDay) {
+      const formattedDate =
+        newDay === this._dateService.todayStr()
+          ? this._translateService.instant(T.G.TODAY_TAG_TITLE)
+          : (this._datePipe.transform(newDay, 'shortDate') as string);
+      this._snackService.open({
+        type: 'CUSTOM',
+        ico: 'info',
+        msg: T.F.PLANNER.S.TASK_ALREADY_PLANNED,
+        translateParams: { date: formattedDate },
+      });
+      return;
+    } else if (this.task.dueWithTime) {
       const task = this.task;
-      const newDate = combineDateAndTime(new Date(this.task.plannedAt), newDayDate);
-
-      const isTodayI = isToday(newDate);
+      const newDate = combineDateAndTime(newDayDate, new Date(this.task.dueWithTime));
       this._taskService.scheduleTask(
         task,
         newDate.getTime(),
-        TaskReminderOptionId.AtStart,
+        this._globalConfigService.cfg()?.reminder.defaultTaskRemindOption ??
+          DEFAULT_GLOBAL_CONFIG.reminder.defaultTaskRemindOption!,
         false,
       );
-      if (isTodayI) {
-        this._taskService.updateTags(task, [TODAY_TAG.id, ...task.tagIds]);
+    } else {
+      if (newDay === this._dateService.todayStr()) {
+        this.addToMyDay();
       } else {
-        this._taskService.updateTags(
-          task,
-          task.tagIds.filter((tid) => tid !== TODAY_TAG.id),
+        this._store.dispatch(
+          PlannerActions.planTaskForDay({
+            task: this.task,
+            day: newDay,
+            isShowSnack: true,
+          }),
         );
       }
-    } else if (newDay === getWorklogStr()) {
-      if (this.isShowAddToToday()) {
-        this.addToMyDay();
-
-        this._snackService.open({
-          type: 'SUCCESS',
-          msg: T.F.PLANNER.S.TASK_PLANNED_FOR,
-          translateParams: {
-            date: formattedDate,
-            extra: await this._plannerService.getSnackExtraStr(newDay),
-          },
-        });
-      }
-    } else {
-      this._store.dispatch(
-        PlannerActions.planTaskForDay({ task: this.task, day: newDay }),
-      );
-      this._snackService.open({
-        type: 'SUCCESS',
-        msg: T.F.PLANNER.S.TASK_PLANNED_FOR,
-        translateParams: {
-          date: formattedDate,
-          extra: await this._plannerService.getSnackExtraStr(newDay),
-        },
-      });
     }
   }
 
-  isShowRemoveFromToday(): boolean {
-    return isShowRemoveFromToday(this.task);
-  }
-
-  isShowAddToToday(): boolean {
-    return isShowAddToToday(this.task, this.workContextService.isToday);
+  unscheduleTask(): void {
+    this._store.dispatch(
+      TaskSharedActions.unscheduleTask({
+        id: this.task.id,
+      }),
+    );
   }
 
   protected readonly ICAL_TYPE = ICAL_TYPE;

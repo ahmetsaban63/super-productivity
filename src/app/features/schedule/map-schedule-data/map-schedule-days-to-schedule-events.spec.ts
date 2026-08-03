@@ -22,7 +22,7 @@ const FAKE_TASK_ENTRY: SVETask = {
     subTaskIds: [],
   } as Partial<TaskCopy> as TaskCopy,
   duration: H,
-  start: new Date('2020-1-1 00:00').getUTCMilliseconds(),
+  start: new Date(2020, 0, 1, 0, 0).getUTCMilliseconds(),
   type: SVEType.Task,
 };
 
@@ -63,11 +63,11 @@ describe('mapScheduleDaysToScheduleEvents()', () => {
         fakeDay({
           entries: [
             fakeTaskEntry('AAA', {
-              start: new Date('2020-1-1 05:00').getTime(),
+              start: new Date(2020, 0, 1, 5, 0).getTime(),
               duration: H,
             }),
             fakeTaskEntry('BBB', {
-              start: new Date('2020-1-1 06:00').getTime(),
+              start: new Date(2020, 0, 1, 6, 0).getTime(),
               duration: 0.5 * H,
             }),
           ],
@@ -88,13 +88,13 @@ describe('mapScheduleDaysToScheduleEvents()', () => {
             title: 'AAA_TITLE',
           },
           dayOfMonth: undefined,
+          plannedForDay: undefined,
           id: 'AAA',
           startHours: 5,
           style: 'grid-column: 2;  grid-row: 61 / span 12',
           timeLeftInHours: 1,
           type: 'Task',
-          isCloseToOthers: false,
-          isCloseToOthersFirst: false,
+          isBeyondBudget: undefined,
         },
         {
           data: {
@@ -106,15 +106,152 @@ describe('mapScheduleDaysToScheduleEvents()', () => {
             title: 'BBB_TITLE',
           },
           dayOfMonth: undefined,
+          plannedForDay: undefined,
           id: 'BBB',
           startHours: 6,
           style: 'grid-column: 2;  grid-row: 73 / span 6',
           timeLeftInHours: 0.5,
           type: 'Task',
-          isCloseToOthers: false,
-          isCloseToOthersFirst: false,
+          isBeyondBudget: undefined,
         },
       ],
     } as any);
+  });
+
+  it('should preserve incomplete-fit indication on rendered events', () => {
+    const res = mapScheduleDaysToScheduleEvents(
+      [
+        fakeDay({
+          entries: [
+            fakeTaskEntry('OVER', {
+              start: new Date(2020, 0, 1, 9, 0).getTime(),
+              duration: H,
+              isBeyondBudget: true,
+            }),
+          ],
+        }),
+      ],
+      FH,
+    );
+
+    expect(res.eventsFlat[0].isBeyondBudget).toBe(true);
+  });
+
+  it('preserves the source occurrence date of a continued repeat projection', () => {
+    const entry = {
+      ...fakeTaskEntry('CONTINUED', {
+        plannedForDay: '2026-07-31',
+        start: new Date(2026, 6, 31, 0, 0).getTime(),
+      }),
+      sourceOccurrenceDate: '2026-07-30',
+    };
+
+    const res = mapScheduleDaysToScheduleEvents([fakeDay({ entries: [entry] })], FH);
+
+    expect(res.eventsFlat[0].sourceOccurrenceDate).toBe('2026-07-30');
+  });
+
+  it('should set calendar badge day for beyond budget planned tasks', () => {
+    const res = mapScheduleDaysToScheduleEvents(
+      [
+        fakeDay({
+          dayDate: '2020-12-12',
+          beyondBudgetTasks: [
+            {
+              ...FAKE_TASK_ENTRY.data,
+              id: 'BEYOND',
+              title: 'Beyond budget',
+              timeEstimate: H,
+              plannedForDay: '2020-12-12',
+            } as TaskCopy,
+          ],
+        }),
+      ],
+      FH,
+    );
+
+    expect(res.beyondBudgetDays[0][0]).toEqual(
+      jasmine.objectContaining({
+        dayOfMonth: 12,
+        plannedForDay: '2020-12-12',
+        isBeyondBudget: true,
+        style: '',
+        type: SVEType.TaskPlannedForDay,
+      }),
+    );
+  });
+
+  it('should detect overlap for two zero-duration events at the same time', () => {
+    const startTime = new Date(2020, 0, 1, 9, 0).getTime();
+    const res = mapScheduleDaysToScheduleEvents(
+      [
+        fakeDay({
+          entries: [
+            fakeTaskEntry('AAA', { start: startTime, duration: 0 }),
+            fakeTaskEntry('BBB', { start: startTime, duration: 0 }),
+          ],
+        }),
+      ],
+      FH,
+    );
+    expect(res.eventsFlat[0].overlap).toEqual({ count: 2, offset: 0 });
+    expect(res.eventsFlat[1].overlap).toEqual({ count: 2, offset: 1 });
+  });
+
+  it('should detect overlap for three zero-duration events at the same time', () => {
+    const startTime = new Date(2020, 0, 1, 9, 0).getTime();
+    const res = mapScheduleDaysToScheduleEvents(
+      [
+        fakeDay({
+          entries: [
+            fakeTaskEntry('AAA', { start: startTime, duration: 0 }),
+            fakeTaskEntry('BBB', { start: startTime, duration: 0 }),
+            fakeTaskEntry('CCC', { start: startTime, duration: 0 }),
+          ],
+        }),
+      ],
+      FH,
+    );
+    expect(res.eventsFlat[0].overlap).toEqual({ count: 3, offset: 0 });
+    expect(res.eventsFlat[1].overlap).toEqual({ count: 3, offset: 1 });
+    expect(res.eventsFlat[2].overlap).toEqual({ count: 3, offset: 2 });
+  });
+
+  it('should detect overlap for two events with normal duration at the same time', () => {
+    const startTime = new Date(2020, 0, 1, 9, 0).getTime();
+    const res = mapScheduleDaysToScheduleEvents(
+      [
+        fakeDay({
+          entries: [
+            fakeTaskEntry('AAA', { start: startTime, duration: H }),
+            fakeTaskEntry('BBB', { start: startTime, duration: H }),
+          ],
+        }),
+      ],
+      FH,
+    );
+    expect(res.eventsFlat[0].overlap).toEqual({ count: 2, offset: 0 });
+    expect(res.eventsFlat[1].overlap).toEqual({ count: 2, offset: 1 });
+  });
+
+  it('should NOT detect overlap for two zero-duration events at different times', () => {
+    const res = mapScheduleDaysToScheduleEvents(
+      [
+        fakeDay({
+          entries: [
+            fakeTaskEntry('AAA', {
+              start: new Date(2020, 0, 1, 9, 0).getTime(),
+              duration: 0,
+            }),
+            fakeTaskEntry('BBB', {
+              start: new Date(2020, 0, 1, 10, 0).getTime(),
+              duration: 0,
+            }),
+          ],
+        }),
+      ],
+      FH,
+    );
+    expect(res.eventsFlat[1].overlap).toBeUndefined();
   });
 });

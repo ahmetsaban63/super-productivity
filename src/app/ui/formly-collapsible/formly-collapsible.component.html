@@ -1,33 +1,10 @@
-<!--<div>-->
-<!--  <button-->
-<!--    type="button"-->
-<!--    (click)="toggle()"-->
-<!--  >-->
-<!--    {{ to.label }}-->
-<!--  </button>-->
-
-<!--  @if(isVisible()) {-->
-<!--  <div style="border: 1px solid red">-->
-<!--    @for (field of field.fieldGroup; track field.id) {-->
-<!--    <formly-field [field]="field"></formly-field>-->
-<!--    }-->
-<!--  </div>-->
-<!--  }-->
-<!--</div>-->
-
-<!--<collapsible-->
-<!--  [isIconBefore]="true"-->
-<!--  [title]="to.label|translate"-->
-<!--&gt;-->
-<!--  <div style="border: 1px solid red">-->
-<!--    @for (field of field.fieldGroup; track field.id) {-->
-<!--    <formly-field [field]="field"></formly-field>-->
-<!--    }-->
-<!--  </div>-->
-<!--</collapsible>-->
-
 <div
   (click)="toggle()"
+  (keydown.enter)="toggle()"
+  (keydown.space)="$event.preventDefault(); toggle()"
+  role="button"
+  tabindex="0"
+  [attr.aria-expanded]="isExpanded()"
   class="collapsible-header sub-section-heading"
 >
   <mat-icon class="collapsible-expand-icon">expand_more</mat-icon>
@@ -39,6 +16,7 @@
   <div
     class="collapsible-panel ani-expand-collapse"
     [@expand]
+    [@.disabled]="!isAnimationEnabled()"
   >
     @for (field of field.fieldGroup; track field.id) {
       <formly-field [field]="field"></formly-field>

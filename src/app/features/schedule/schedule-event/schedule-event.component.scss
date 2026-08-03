@@ -1,77 +1,61 @@
-@import '../../../../variables.scss';
+@use '../../../../styles/_globals.scss' as *;
 
-$split-extra-border-radius: 20px;
-$margin-bottom: 6px;
-$margin-right: 10px;
+// TODO split up into more manageable bits
 
 :host {
-  border-radius: 6px;
-  margin-right: $margin-right;
-  // size of sticky header
+  --split-extra-border-radius: 20px;
+  --margin-bottom: 6px;
+  --margin-right: 10px;
+  // Small left margin so events don't sit flush against the day column's
+  // left edge (and, for the first day, the sticky time column).
+  --margin-left: 4px;
+  --offset: 20px;
+  --offset-short-event: 15px;
+  --standard-border-radius: 6px;
+
+  border-radius: var(--standard-border-radius);
+  margin: 0 var(--margin-right) var(--margin-bottom) var(--margin-left);
   scroll-margin-top: 120px;
   scroll-padding-top: 120px;
   line-height: 1;
   min-height: 20px;
   display: flex;
   align-items: flex-start;
-  margin-bottom: $margin-bottom;
-  border: 1px solid $light-theme-separator-color;
-  //box-shadow: $whiteframe-shadow-1dp;
-  background: #fff;
-  color: $light-theme-text-color;
+  border: 1px solid var(--separator-color);
+  border-left: 3px solid var(--project-color, var(--separator-color));
+  background: var(--schedule-event-bg);
+  color: var(--text-color);
   position: relative;
   z-index: 2;
-  border-left: 3px solid var(--project-color, $light-theme-separator-color);
   user-select: none;
+
   // has to be for after elements
   overflow: visible !important;
   min-width: 0;
 
-  // &:hover {
-  //   z-index: 3;
-  //   overflow: visible;
-  // }
-
-  @include darkTheme() {
-    border-color: rgba(255, 255, 255, 0.1);
-    border-left-color: var(--project-color, $dark-theme-separator-color);
-    background: $dark-theme-bg-slightly-lighter;
-    color: $dark-theme-text-color;
+  // Ensure resize handle has space and is clickable
+  &.resizable {
+    margin-bottom: calc(var(--margin-bottom) + 4px);
   }
 
   &.very-short-event {
-    // slightly move up to  reduce chance of overlap with next
-    //margin-top: -2px;
     align-items: center;
-
-    //.title {
-    //  column-width: unset;
-    //  line-clamp: 1;
-    //  max-width: 200px;
-    //}
   }
 
   &.split-start {
-    border-radius: $split-extra-border-radius;
-    border-bottom-left-radius: 0;
-    border-bottom-right-radius: 0;
+    border-radius: var(--split-extra-border-radius) var(--split-extra-border-radius) 0 0;
     border-bottom-style: dashed;
   }
 
   &.split-continued {
-    border-radius: $split-extra-border-radius;
-    border-top-left-radius: 0;
-    border-bottom-right-radius: 0;
-    border-bottom-style: dashed;
-    border-top-style: dashed;
+    border-radius: 0 var(--split-extra-border-radius) 0 0;
+    border-style: dashed solid dashed solid;
     min-height: 8px;
   }
 
   &.split-continued-last {
-    border-radius: $split-extra-border-radius;
+    border-radius: 0 0 var(--split-extra-border-radius) var(--split-extra-border-radius);
     border-top-style: dashed;
-    border-top-left-radius: 0;
-    border-top-right-radius: 0;
     min-height: 8px;
   }
 
@@ -87,119 +71,107 @@ $margin-right: 10px;
       line-height: 0.4;
     }
   }
-}
 
-:host.LunchBreak {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  background: transparent;
-  margin-top: 2px;
-  border: none !important;
-  box-shadow: none !important;
-  z-index: 1;
+  &.LunchBreak {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: transparent;
+    margin-top: var(--s-quarter);
+    border: none !important;
+    box-shadow: none !important;
+    z-index: 1;
 
-  .title {
-    flex-grow: 0;
-    column-width: auto;
-    flex-shrink: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    .title {
+      flex: 0 1 auto;
+      column-width: auto;
+      @include truncateText();
+    }
+
+    .ico-wrapper {
+      margin-top: 0;
+    }
   }
 
-  .ico-wrapper {
-    margin-top: 0;
+  &::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 3;
+    display: block;
   }
-}
 
-:host::before {
-  // NOTE: there are some styles in the parent component since host:active + :host  is not working
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: -1 * ($margin-bottom + 1);
-  left: 0;
-  right: -1 * ($margin-right + 4);
-  z-index: 3;
-  //background: rgba(255, 0, 0, 0.1);
-  display: block;
-}
+  &.resizable::before {
+    // Don't extend bottom for resizable events to avoid covering resize handle
+    bottom: 0;
+  }
 
-/* stylelint-disable no-duplicate-selectors */
-
-// non draggable
-:host {
   &.CalendarEvent,
   &.RepeatProjection,
   &.RepeatProjectionSplit,
   &.RepeatProjectionSplitContinued,
   &.RepeatProjectionSplitContinuedLast,
   &.ScheduledRepeatProjection {
-    background: $light-theme-bg;
     border-style: dashed;
     border-left-style: solid;
-
-    @include darkTheme() {
-      //border-color: $dark-theme-separator-color;
-      background: $dark-theme-bg;
-      background: $dark1;
-    }
-
-    > * {
-      opacity: 0.7;
-    }
+    opacity: 0.7;
+    background: var(--schedule-event-bg);
   }
-}
 
-:host.CalendarEvent {
-  border-left-width: 1px;
-  border-left-color: $light-theme-extra-border-color;
-
-  @include darkTheme() {
-    border-left-color: $dark-theme-extra-border-color;
+  &.CalendarEvent {
+    border-left: 3px solid var(--project-color, var(--extra-border-color));
   }
-}
 
-:host-context(.is-not-dragging) :host.CalendarEvent:hover {
-  border-color: $c-accent;
-  color: $c-accent;
-}
+  &.CalendarEvent.is-reference-calendar {
+    border-style: solid;
+    opacity: 0.55;
+    background-image: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 4px,
+      rgba(128, 128, 128, 0.08) 4px,
+      rgba(128, 128, 128, 0.08) 8px
+    );
+  }
 
-:host-context(.is-not-dragging) {
-  &.ScheduledTask,
-  &.CalendarEvent,
-  &.RepeatProjection,
-  &.RepeatProjectionSplit,
-  &.ScheduledRepeatProjection {
-    cursor: pointer;
+  &.is-beyond-budget {
+    border-bottom: calc(var(--s-quarter) + 1px) solid var(--c-warn);
 
-    &:hover {
-      opacity: 1;
-      //outline: 1px solid $c-accent;
-      border-color: $c-accent;
-
-      .ico {
-        color: $c-accent;
-      }
-
-      > * {
-        opacity: 1;
-      }
+    &::after {
+      content: '!';
+      position: absolute;
+      bottom: calc(-1 * var(--s-half));
+      left: 50%;
+      z-index: 4;
+      transform: translateX(-50%);
+      display: grid;
+      place-items: center;
+      width: var(--s2);
+      height: var(--s2);
+      box-sizing: border-box;
+      border: 1px solid var(--c-warn);
+      border-radius: 50%;
+      background: var(--schedule-event-bg);
+      color: var(--c-warn);
+      font-size: 12px;
+      font-weight: 900;
+      line-height: 1;
+      pointer-events: none;
     }
   }
-}
 
-//  scheduable tasks
-:host {
   &.ScheduledRepeatProjection .ico {
-    color: $c-primary;
+    color: var(--c-primary);
   }
 
   &.ScheduledTask {
     border-radius: 0;
 
     .ico {
-      color: $c-primary;
+      color: var(--c-primary);
       font-size: 24px;
       height: 24px;
       min-width: 24px;
@@ -209,37 +181,57 @@ $margin-right: 10px;
     }
 
     .ico-wrapper {
-      margin-left: 6px;
-      margin-top: 4px;
-      margin-right: 4px;
+      margin: var(--s-half) var(--s-half) 0 6px;
       opacity: 1;
 
       @include mq(xs, max) {
-        margin-left: 1px;
-        margin-top: 1px;
+        margin: 1px 0 0 1px;
       }
     }
 
     .time-badge {
-      color: $light-theme-text-color;
-      border-color: $c-primary;
-      //color: $c-primary;
-      @include darkTheme() {
-        color: $dark-theme-text-color;
-        border-color: $c-primary;
-      }
+      color: var(--text-color);
+      border-color: var(--c-primary);
     }
   }
 }
 
-/* stylelint-enable no-duplicate-selectors */
+:host-context(.is-not-dragging) {
+  // Keep in sync with the repeat-projection branch of clickHandler(): a segment
+  // that opens the edit dialog must also look like it does. The continued types
+  // became clickable in #9314 and were missing the affordance.
+  :host.CalendarEvent,
+  :host.RepeatProjection,
+  :host.RepeatProjectionSplit,
+  :host.ScheduledRepeatProjection,
+  :host.RepeatProjectionSplitContinued,
+  :host.RepeatProjectionSplitContinuedLast {
+    cursor: pointer;
+
+    &:hover {
+      opacity: 1;
+      border-color: var(--c-accent);
+
+      &.CalendarEvent {
+        color: var(--c-accent);
+      }
+
+      .ico {
+        color: var(--c-accent);
+      }
+
+      > * {
+        opacity: 1;
+      }
+    }
+  }
+}
 
 .time-badge {
   opacity: 1 !important;
   position: absolute;
   left: 50%;
   top: 50%;
-  bottom: 0;
   transform: translate(-50%, 0);
   font-size: 10px;
   z-index: 1;
@@ -247,30 +239,18 @@ $margin-right: 10px;
   height: 13px;
   text-align: center;
   padding: 1px;
-  border: 1px solid $light-theme-extra-border-color;
-  background: #fff;
-  border-radius: $card-border-radius;
-  color: #000;
+  @include extraBorder();
+  border-radius: var(--card-border-radius);
+  color: var(--text-color);
+  background: var(--bg-lighter);
 
   @include mq(xs, max) {
     font-size: 9px;
     height: 11px;
   }
 
-  @include darkTheme() {
-    color: $dark-theme-text-color;
-    border-color: $dark-theme-extra-border-color;
-    background: $dark-theme-bg-lighter;
-  }
-
   :host.very-short-event & {
-    //bottom: 4px
     margin-top: -4px;
-  }
-
-  :host-context(.is-not-dragging):hover & {
-    border-color: $c-accent;
-    color: $c-accent;
   }
 }
 
@@ -278,13 +258,24 @@ $margin-right: 10px;
   pointer-events: none;
 }
 
+.calendar-menu-anchor {
+  position: absolute;
+  pointer-events: auto;
+}
+
+:host(.month-schedule-event).is-beyond-budget::after {
+  bottom: calc(-1 * var(--s-quarter));
+  width: calc(var(--s2) - var(--s-quarter));
+  height: calc(var(--s2) - var(--s-quarter));
+  font-size: 10px;
+}
+
 .ico-wrapper {
   position: relative;
-  margin-left: 6px;
-  margin-top: 8px;
+  margin: var(--s) 0 0 6px;
 
   @include mq(xs, max) {
-    margin-top: 4px;
+    margin-top: var(--s-half);
   }
 
   :host.very-short-event & {
@@ -292,25 +283,11 @@ $margin-right: 10px;
   }
 
   :host.ScheduledRepeatProjection & {
-    margin-right: 2px;
+    margin-right: var(--s-quarter);
   }
 
   mat-icon {
     display: block;
-  }
-
-  mat-icon + mat-icon {
-    display: none;
-  }
-
-  :host:hover & {
-    mat-icon:first-of-type:not(:last-of-type) {
-      display: none;
-    }
-
-    mat-icon:nth-child(2) {
-      display: block;
-    }
   }
 }
 
@@ -339,16 +316,11 @@ $margin-right: 10px;
   min-width: 14px;
   width: auto;
   font-weight: 900;
-  color: $light-theme-text-color-muted;
-  border: 1px solid $light-theme-text-color-muted;
+  border: 1px solid var(--text-color-muted);
   border-top-width: 3px;
   border-radius: 2px;
   position: relative;
-
-  @include darkTheme() {
-    color: $dark-theme-text-color-muted;
-    border-color: $dark-theme-text-color-muted;
-  }
+  color: var(--text-color-muted);
 
   @include mq(xs, max) {
     border-radius: 1px;
@@ -362,103 +334,216 @@ $margin-right: 10px;
 }
 
 .title {
+  --title-padding-y: 6px;
+  --title-line-height: 1.4em;
+
   font-size: 14px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex-grow: 1;
-  flex-shrink: 1;
-  padding: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: var(--title-padding-y) 6px;
+  box-sizing: border-box;
   font-weight: 400;
   line-height: 1.4;
   max-height: 100%;
+  overflow: hidden;
   text-align: left;
-  // somehow this fixes the cut off lines problem
-  column-width: 250px;
-  //font-weight: bold;
 
   @include mq(xs, max) {
-    column-width: 120px;
+    --title-padding-y: var(--s-half);
+    --title-line-height: 1.3em;
+
     font-size: 11px;
     line-height: 1.3;
-    padding: 4px;
+    padding: var(--title-padding-y);
   }
 
   @include mq(xxs, max) {
     font-size: 10px;
-    line-height: 1.3;
-    padding: 4px;
   }
 
   :host.very-short-event & {
-    padding-top: 1px;
-    padding-bottom: 2px;
+    max-height: 100%;
+    padding: 1px 6px var(--s-quarter);
+  }
+
+  // Keep padding off the clamped element. Padding on a line-clamped box can
+  // reveal a sliver of the next hidden line in Chromium.
+  .title-text {
+    display: -webkit-box;
+    max-height: calc(var(--title-line-clamp, 1) * var(--title-line-height));
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: var(--title-line-clamp, 1);
+    line-clamp: var(--title-line-clamp, 1);
+  }
+
+  :host.very-short-event & .title-text {
+    display: block;
+    @include truncateText();
   }
 
   :host.SplitTaskContinued &,
   :host.RepeatProjectionSplitContinued &,
   :host.SplitTaskContinuedLast &,
-  :host.RepeatProjectionSplitContinuedLast {
-    //white-space: nowrap;
-    //max-width: 100%;
-    line-clamp: 1;
+  :host.RepeatProjectionSplitContinuedLast & {
+    .title-text {
+      -webkit-line-clamp: 1;
+      line-clamp: 1;
+    }
+  }
+
+  // Override inherited pointer-events: none from :host > * so links are clickable.
+  // position: relative + z-index: 4 lifts links above the ::before overlay (z-index: 3).
+  a {
+    pointer-events: auto;
+    cursor: pointer;
+    position: relative;
+    z-index: 4;
   }
 }
 
-// planner tasks
-:host-context(.is-dragging) {
+:host-context(.is-dragging.isShiftKeyPressed) {
   :host.TaskPlannedForDay,
   :host.SplitTaskPlannedForDay,
   :host.Task,
   :host.SplitTask {
-    box-shadow: $whiteframe-shadow-6dp;
+    box-shadow: var(--whiteframe-shadow-6dp);
   }
 }
 
-:host-context(.isDarkTheme .is-dragging) {
+:host-context(.isDarkTheme.is-dragging.isShiftKeyPressed) {
   :host.TaskPlannedForDay,
   :host.SplitTaskPlannedForDay,
   :host.Task,
   :host.SplitTask {
-    background: $dark24;
+    background: var(--bg-lightest);
   }
 }
 
-$offset: 40px;
 :host.drag-over {
-  transform: translateY($offset);
   z-index: 3;
-
-  &:after {
-    // NOTE: there are some styles in the parent component since host:active + :host  is not working
-    content: '';
-    position: absolute;
-    transform: translateY(-$offset);
-    top: -1 * $margin-bottom;
-    height: $offset + $margin-bottom;
-    left: 0;
-    right: -1 * ($margin-right + 4);
-    z-index: 3;
-    //border: 1px solid red;
-    //background: rgba(255, 0, 0, 0.2);
-  }
+  transform: translateX(16px);
+  //transform: translateY(var(--offset));
+  //
+  //&:after {
+  //  content: '';
+  //  position: absolute;
+  //  transform: translateY(calc(-1 * var(--offset)));
+  //  top: calc(-1 * var(--margin-bottom));
+  //  height: calc(var(--offset) + var(--margin-bottom));
+  //  left: 0;
+  //  right: calc(-1 * (var(--margin-right) + 4px));
+  //  z-index: 3;
+  //}
+  //
+  //&.very-short-event {
+  //  transform: translateY(var(--offset-short-event));
+  //
+  //  &:after {
+  //    transform: translateY(calc(-1 * var(--offset-short-event)));
+  //    height: calc(var(--offset-short-event) + var(--margin-bottom));
+  //  }
+  //}
 }
 
-$offsetShortEvent: 15px;
-:host.very-short-event.drag-over {
-  transform: translateY($offsetShortEvent);
-  z-index: 3;
-
-  &:after {
-    transform: translateY(-$offsetShortEvent);
-    height: $offsetShortEvent + $margin-bottom;
-  }
+// Not draggable (the head segment marks where the task starts), but clicking
+// still opens the task, so hint at it.
+:host.SplitTaskContinued,
+:host.SplitTaskContinuedLast {
+  cursor: pointer;
 }
 
 :host.draggable {
   cursor: grab;
 
+  // Ensure the ::before pseudo-element also shows the cursor
+  &::before {
+    cursor: grab;
+  }
+
   &:active {
     cursor: grabbing;
     transition: none;
+
+    &::before {
+      cursor: grabbing;
+    }
   }
+}
+
+// Resize functionality
+.resize-handle {
+  position: absolute;
+  bottom: -6px;
+  left: -2px;
+  right: -2px;
+  height: 12px;
+  cursor: ns-resize;
+  z-index: 4;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+  pointer-events: auto;
+
+  &:hover {
+    opacity: 1;
+  }
+
+  .resize-grip {
+    position: absolute;
+    bottom: 1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 32px;
+    height: 4px;
+    border-radius: 2px;
+
+    &::before {
+      content: '';
+      position: absolute;
+      top: -5px;
+      left: 4px;
+      right: 4px;
+      height: 3px;
+      background: var(--separator-color);
+      border-radius: 1px;
+    }
+  }
+}
+
+:host:hover .resize-handle {
+  opacity: 0.7;
+}
+
+:host.is-beyond-budget .resize-grip {
+  display: none;
+}
+
+:host.is-resizing {
+  transition: none !important;
+  user-select: none;
+  z-index: 20 !important; // Ensure resizing events appear above all others
+  border-color: var(--c-accent);
+
+  .ico {
+    color: var(--c-accent);
+  }
+
+  .resize-handle {
+    opacity: 1;
+  }
+
+  .resize-grip {
+    &::before {
+      background: var(--c-accent);
+    }
+  }
+}
+
+.cal-menu-trigger {
+  position: absolute;
+  width: 0;
+  height: 0;
+  visibility: hidden;
 }

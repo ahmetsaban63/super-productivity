@@ -13,21 +13,13 @@ export interface DialogIdleReturnData {
   trackItems: IdleTrackItem[];
   simpleCounterToggleBtnsWhenNoTrackItems?: SimpleCounterIdleBtn[];
   isResetBreakTimer: boolean;
+  wasFocusSessionRunning: boolean;
 }
 
 export interface DialogIdlePassedData {
   enabledSimpleStopWatchCounters: SimpleCounter[];
   lastCurrentTaskId: string | null;
-}
-
-export interface DialogIdleSplitPassedData {
-  simpleCounterToggleBtns: SimpleCounterIdleBtn[];
-  prevSelectedTask: Task | null;
-  newTaskTitle?: string;
-}
-
-export interface DialogIdleSplitReturnData {
-  trackItems: IdleTrackItem[];
+  wasFocusSessionRunning: boolean;
 }
 
 export interface IdleTrackItem {

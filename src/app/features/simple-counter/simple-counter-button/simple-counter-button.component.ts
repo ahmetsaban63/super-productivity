@@ -17,14 +17,23 @@ import { GlobalTrackingIntervalService } from '../../../core/global-tracking-int
 import { merge, of, Subject, Subscription } from 'rxjs';
 import { DateService } from 'src/app/core/date/date.service';
 import { toObservable, toSignal } from '@angular/core/rxjs-interop';
-import { distinctUntilChanged, filter, map, scan, switchMap } from 'rxjs/operators';
+import {
+  distinctUntilChanged,
+  filter,
+  map,
+  scan,
+  startWith,
+  switchMap,
+  tap,
+} from 'rxjs/operators';
 import { BannerService } from '../../../core/banner/banner.service';
 import { BannerId } from '../../../core/banner/banner.model';
-import { MatMiniFabButton } from '@angular/material/button';
+import { MatIconButton } from '@angular/material/button';
 import { LongPressDirective } from '../../../ui/longpress/longpress.directive';
 import { MatIcon } from '@angular/material/icon';
 import { AsyncPipe } from '@angular/common';
 import { MsToMinuteClockStringPipe } from '../../../ui/duration/ms-to-minute-clock-string.pipe';
+import { ProgressCircleComponent } from '../../../ui/progress-circle/progress-circle.component';
 
 @Component({
   selector: 'simple-counter-button',
@@ -36,11 +45,12 @@ import { MsToMinuteClockStringPipe } from '../../../ui/duration/ms-to-minute-clo
     '[class.isSuccess]': 'isSuccess()',
   },
   imports: [
-    MatMiniFabButton,
     LongPressDirective,
     MatIcon,
     AsyncPipe,
     MsToMinuteClockStringPipe,
+    MatIconButton,
+    ProgressCircleComponent,
   ],
 })
 export class SimpleCounterButtonComponent implements OnDestroy, OnInit {
@@ -55,14 +65,14 @@ export class SimpleCounterButtonComponent implements OnDestroy, OnInit {
   SimpleCounterType: typeof SimpleCounterType = SimpleCounterType;
 
   todayStr = toSignal(this._todayStr$, { initialValue: this._dateService.todayStr() });
-  simpleCounter = input<SimpleCounter>();
+  simpleCounter = input.required<SimpleCounter>();
   isTimeUp = signal<boolean>(false);
   isSuccess = computed(() => {
     const sc = this.simpleCounter();
     return (
       sc?.isTrackStreaks &&
-      sc?.countOnDay[this.todayStr()] &&
-      sc?.countOnDay[this.todayStr()] >= sc?.streakMinValue
+      sc?.countOnDay?.[this.todayStr()] &&
+      sc?.countOnDay?.[this.todayStr()] >= (sc.streakMinValue || 0)
     );
   });
 
@@ -76,20 +86,40 @@ export class SimpleCounterButtonComponent implements OnDestroy, OnInit {
 
   countdownTime$ = this._countdownDuration$.pipe(
     switchMap((countdownDuration) =>
-      merge(of(true), this._resetCountdown$).pipe(
-        switchMap(() =>
-          this._globalTrackingIntervalService.tick$.pipe(
+      merge(of(false), this._resetCountdown$.pipe(map(() => true))).pipe(
+        switchMap((isManualReset) => {
+          const id = this.simpleCounter()?.id;
+          const cached = id
+            ? this._simpleCounterService.getCountdownRemaining(id)
+            : undefined;
+          // Use cached remaining time on component init (survives component recreation),
+          // but only if it's valid (not exceeding configured duration)
+          const initial =
+            !isManualReset && cached !== undefined && cached <= countdownDuration
+              ? cached
+              : countdownDuration;
+
+          return this._globalTrackingIntervalService.tick$.pipe(
+            startWith({ duration: 0, date: this._dateService.todayStr() }),
             scan((acc, tick) => {
               if (!this.simpleCounter()?.isOn) {
                 return acc;
               }
-
               const newVal = acc - tick.duration;
               return newVal < 0 ? 0 : newVal;
-            }, countdownDuration),
-            // }, 10000),
-          ),
-        ),
+            }, initial),
+            tap((remaining) => {
+              const simpleCounter = this.simpleCounter();
+              if (
+                id &&
+                (simpleCounter?.isOn ||
+                  this._simpleCounterService.hasStartedCountdown(id))
+              ) {
+                this._simpleCounterService.setCountdownRemaining(id, remaining);
+              }
+            }),
+          );
+        }),
         distinctUntilChanged(),
       ),
     ),
@@ -118,6 +148,38 @@ export class SimpleCounterButtonComponent implements OnDestroy, OnInit {
     }
   }
 
+  calcCountdownProgress(remaining: number | null, total?: number | null): number {
+    if (remaining == null || !total || total <= 0) {
+      return 0;
+    }
+    const elapsed = total - remaining;
+    if (!Number.isFinite(elapsed)) {
+      return 0;
+    }
+    const progress = (elapsed / total) * 100;
+    return Math.min(100, Math.max(0, progress));
+  }
+
+  hasVisibleCountdownTime(
+    simpleCounter: SimpleCounter,
+    countdownTime: number | null | undefined,
+  ): boolean {
+    if (
+      simpleCounter.type !== SimpleCounterType.RepeatedCountdownReminder ||
+      countdownTime === null ||
+      countdownTime === undefined ||
+      countdownTime <= 0
+    ) {
+      return false;
+    }
+
+    if (simpleCounter.isOn) {
+      return true;
+    }
+
+    return this._simpleCounterService.hasStartedCountdown(simpleCounter.id);
+  }
+
   ngOnDestroy(): void {
     this._subs.unsubscribe();
   }
@@ -125,7 +187,15 @@ export class SimpleCounterButtonComponent implements OnDestroy, OnInit {
   countUpAndNextRepeatCountdownSession(): void {
     this._bannerService.dismiss(BannerId.SimpleCounterCountdownComplete);
     this.toggleCounter();
-    this._resetCountdown$.next();
+    const simpleCounter = this.simpleCounter();
+    const id = simpleCounter?.id;
+    if (id) {
+      this._simpleCounterService.clearCountdownRemaining(id);
+      if (typeof simpleCounter.countdownDuration === 'number') {
+        this._simpleCounterService.startCountdown(id, simpleCounter.countdownDuration);
+      }
+    }
+    this._resetCountdown$.next(undefined);
     this.isTimeUp.set(false);
   }
 
@@ -134,6 +204,16 @@ export class SimpleCounterButtonComponent implements OnDestroy, OnInit {
     if (!c) {
       throw new Error('No simple counter model');
     }
+
+    if (
+      c.type === SimpleCounterType.RepeatedCountdownReminder &&
+      !c.isOn &&
+      typeof c.countdownDuration === 'number' &&
+      !this._simpleCounterService.hasStartedCountdown(c.id)
+    ) {
+      this._simpleCounterService.startCountdown(c.id, c.countdownDuration);
+    }
+
     this._simpleCounterService.toggleCounter(c.id);
   }
 

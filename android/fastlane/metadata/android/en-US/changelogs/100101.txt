@@ -1,1 +1,0 @@
-Various minor bug fixes and improvements

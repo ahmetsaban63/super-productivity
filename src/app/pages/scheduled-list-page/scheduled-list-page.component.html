@@ -37,13 +37,15 @@
                       [task]="taskRepeatCfg"
                     ></tag-list>
                   </div>
+
                   <div
                     (click)="editTaskRepeatCfg(taskRepeatCfg)"
                     class="repeat-text-and-icon"
+                    [matTooltip]="getTooltipText(taskRepeatCfg)"
                     mat-ripple
                   >
                     <div class="repeat-text">{{ getRepeatInfoText(taskRepeatCfg) }}</div>
-                    <mat-icon svgIcon="repeat"></mat-icon>
+                    <mat-icon>repeat</mat-icon>
                   </div>
                 </div>
               </div>
@@ -55,14 +57,16 @@
   } @else {
     <full-page-spinner></full-page-spinner>
   }
-  @if (scheduledTaskService.allScheduledTasks$ | async; as allScheduledTasks) {
+  @if (tasksPlannedWithTime$ | async; as allScheduledTasks) {
     <section
       class="component-wrapper"
       style="margin-top: 24px"
     >
-      <h2>{{ T.SCHEDULE.SCHEDULED_TASKS_WITH_REMINDER | translate }}</h2>
+      <h2>{{ T.SCHEDULE.SCHEDULED_TASKS_WITH_TIME | translate }}</h2>
       @if (!allScheduledTasks?.length) {
-        <p class="no-scheduled-tasks">{{ T.SCHEDULE.NO_SCHEDULED | translate }}</p>
+        <p class="no-scheduled-tasks">
+          {{ T.SCHEDULE.NO_SCHEDULED_WITH_TIME | translate }}
+        </p>
       }
       <div
         [@standardList]="allScheduledTasks?.length"
@@ -77,16 +81,22 @@
             >
               <div class="date-and-time-left">
                 <div class="date hide-xs">
-                  {{ task.plannedAt | date: 'EE, d MMM, ' }}
-                  {{ task.plannedAt | date: 'shortTime' }}
+                  {{
+                    task.dueWithTime | localeDate: 'EE, d MMM, ' : undefined : locale()
+                  }}
+                  {{ task.dueWithTime | shortTime }}
                 </div>
                 <div class="date show-xs-only">
-                  {{ task.plannedAt | date: 'd MMM, ' }},
-                  {{ task.plannedAt | date: 'shortTime' }}
+                  {{ task.dueWithTime | localeDate: 'd MMM, ' : undefined : locale() }},
+                  {{ task.dueWithTime | shortTime }}
                 </div>
-                <div class="time-left">({{ task.plannedAt | humanizeTimestamp }})</div>
+                <div class="time-left">({{ task.dueWithTime | humanizeTimestamp }})</div>
               </div>
-              <mat-icon>alarm</mat-icon>
+              @if (task.remindAt) {
+                <mat-icon>alarm</mat-icon>
+              } @else {
+                <mat-icon>schedule</mat-icon>
+              }
             </div>
           </planner-task>
         }
@@ -102,7 +112,9 @@
     >
       <h2>{{ T.SCHEDULE.NO_SCHEDULED_TITLE | translate }}</h2>
       @if (!allScheduledTasks?.length) {
-        <p class="no-scheduled-tasks">{{ T.SCHEDULE.NO_SCHEDULED | translate }}</p>
+        <p class="no-scheduled-tasks">
+          {{ T.SCHEDULE.NO_SCHEDULED_FOR_DAY | translate }}
+        </p>
       }
       <div
         [@standardList]="allScheduledTasks?.length"
@@ -116,10 +128,11 @@
               mat-ripple
             >
               <div class="date-and-time-left">
-                <div class="date">{{ task.plannedDay | date: 'EE, d MMM' }}</div>
-                <div class="time-left">({{ task.plannedDay | humanizeTimestamp }})</div>
+                <div class="date">
+                  {{ task.dueDay | localeDate: 'EE, d MMM' : undefined : locale() }}
+                </div>
               </div>
-              <mat-icon>alarm</mat-icon>
+              <mat-icon>today</mat-icon>
             </div>
           </planner-task>
         }
@@ -127,5 +140,58 @@
     </section>
   } @else {
     <full-page-spinner></full-page-spinner>
+  }
+  @if (tasksWithDeadlines$ | async; as tasksWithDeadlines) {
+    @if (tasksWithDeadlines.length) {
+      <section
+        class="component-wrapper"
+        style="margin-top: 24px"
+      >
+        <h2>{{ T.SCHEDULE.TASKS_WITH_DEADLINES | translate }}</h2>
+        <div
+          [@standardList]="tasksWithDeadlines.length"
+          class="tasks"
+        >
+          @for (task of tasksWithDeadlines; track task.id) {
+            <planner-task [task]="task">
+              <div
+                (click)="editDeadline(task, $event)"
+                class="due-date"
+                mat-ripple
+              >
+                <div class="date-and-time-left">
+                  @if (task.deadlineWithTime) {
+                    <div class="date hide-xs">
+                      {{
+                        task.deadlineWithTime
+                          | localeDate: 'EE, d MMM, ' : undefined : locale()
+                      }}
+                      {{ task.deadlineWithTime | shortTime }}
+                    </div>
+                    <div class="date show-xs-only">
+                      {{
+                        task.deadlineWithTime
+                          | localeDate: 'd MMM, ' : undefined : locale()
+                      }},
+                      {{ task.deadlineWithTime | shortTime }}
+                    </div>
+                    <div class="time-left">
+                      ({{ task.deadlineWithTime | humanizeTimestamp }})
+                    </div>
+                  } @else if (task.deadlineDay) {
+                    <div class="date">
+                      {{
+                        task.deadlineDay | localeDate: 'EE, d MMM' : undefined : locale()
+                      }}
+                    </div>
+                  }
+                </div>
+                <mat-icon>flag</mat-icon>
+              </div>
+            </planner-task>
+          }
+        </div>
+      </section>
+    }
   }
 </div>

@@ -1,6 +1,6 @@
-import { Component, Input, output } from '@angular/core';
+import { ChangeDetectionStrategy, Component, Input, output } from '@angular/core';
 import { FormControl, FormGroup, FormsModule, ReactiveFormsModule } from '@angular/forms';
-import { GlobalConfigSectionKey, SoundConfig } from '../global-config.model';
+import { GlobalConfigFormSectionKey, SoundConfig } from '../global-config.model';
 import { ProjectCfgFormKey } from '../../project/project.model';
 import { exists } from 'src/app/util/exists';
 import { debounceTime, distinctUntilChanged } from 'rxjs/operators';
@@ -16,6 +16,7 @@ import { MatSelect } from '@angular/material/select';
 import { MatOption } from '@angular/material/core';
 import { MatSlideToggle } from '@angular/material/slide-toggle';
 import { TranslatePipe } from '@ngx-translate/core';
+import { T } from '../../../t.const';
 
 const sectionKey = 'sound';
 
@@ -23,6 +24,7 @@ const sectionKey = 'sound';
   selector: 'config-sound-form',
   templateUrl: './config-sound-form.component.html',
   styleUrls: ['./config-sound-form.component.scss'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
   imports: [
     CollapsibleComponent,
     FormsModule,
@@ -47,7 +49,7 @@ export class ConfigSoundFormComponent {
   }
 
   readonly save = output<{
-    sectionKey: GlobalConfigSectionKey | ProjectCfgFormKey;
+    sectionKey: GlobalConfigFormSectionKey | ProjectCfgFormKey;
     config: SoundConfig;
   }>();
 
@@ -55,12 +57,14 @@ export class ConfigSoundFormComponent {
     volume: new FormControl<number>(0),
     doneSound: new FormControl<string | null>(null),
     breakReminderSound: new FormControl<string | null>(null),
+    trackTimeSound: new FormControl<string | null>(null),
     isIncreaseDoneSoundPitch: new FormControl<boolean>(false),
   });
 
   soundOpts = SOUND_OPTS;
   config?: SoundConfig;
-  title = 'GCF.SOUND.TITLE';
+  title = T.GCF.SOUND.TITLE;
+  readonly T = T;
   private isInitializing = true;
 
   constructor() {
@@ -72,6 +76,7 @@ export class ConfigSoundFormComponent {
             volume: data.volume ?? 0,
             doneSound: data.doneSound ?? null,
             breakReminderSound: data.breakReminderSound ?? null,
+            trackTimeSound: data.trackTimeSound ?? null,
             isIncreaseDoneSoundPitch: data.isIncreaseDoneSoundPitch ?? false,
           });
         }
@@ -93,6 +98,12 @@ export class ConfigSoundFormComponent {
         .get('breakReminderSound')!
         .patchValue(this.config.breakReminderSound, { emitEvent: false, onlySelf: true });
       this.soundForm
+        .get('trackTimeSound')!
+        .patchValue(this.config.trackTimeSound || null, {
+          emitEvent: false,
+          onlySelf: true,
+        });
+      this.soundForm
         .get('isIncreaseDoneSoundPitch')!
         .patchValue(this.config.isIncreaseDoneSoundPitch, {
           emitEvent: false,
@@ -112,6 +123,8 @@ export class ConfigSoundFormComponent {
       cfg.breakReminderSound
     ) {
       playSound(cfg.breakReminderSound, cfg.volume);
+    } else if (cfg.trackTimeSound !== this.config?.trackTimeSound && cfg.trackTimeSound) {
+      playSound(cfg.trackTimeSound, cfg.volume);
     } else {
       playDoneSound(cfg);
     }

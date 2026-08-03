@@ -29,32 +29,36 @@ import { toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { IssueService } from '../../issue/issue.service';
 import {
   catchError,
-  debounceTime,
+  debounce,
   distinctUntilChanged,
+  finalize,
   map,
   switchMap,
   tap,
 } from 'rxjs/operators';
 import { Store } from '@ngrx/store';
-import { Observable, of } from 'rxjs';
+import { from, Observable, of, timer } from 'rxjs';
 import { selectAllTaskIssueIdsForIssueProvider } from '../../tasks/store/task.selectors';
 import { DialogEditIssueProviderComponent } from '../../issue/dialog-edit-issue-provider/dialog-edit-issue-provider.component';
 import { MatDialog } from '@angular/material/dialog';
 import { getErrorTxt } from '../../../util/get-error-text';
 import { ErrorCardComponent } from '../../../ui/error-card/error-card.component';
 import { selectProjectById } from '../../project/store/project.selectors';
-import { HelperClasses } from '../../../app.constants';
+import { HelperClasses, IS_WEB_BROWSER } from '../../../app.constants';
 import { IssueProviderActions } from '../../issue/store/issue-provider.actions';
 import { IS_MOUSE_PRIMARY } from '../../../util/is-mouse-primary';
 import { getIssueProviderHelpLink } from '../../issue/mapping-helper/get-issue-provider-help-link';
 import { ISSUE_PROVIDER_HUMANIZED } from '../../issue/issue.const';
 import { IssuePanelCalendarAgendaComponent } from '../issue-panel-calendar-agenda/issue-panel-calendar-agenda.component';
+import { PluginIssueProviderRegistryService } from '../../../plugins/issue-provider/plugin-issue-provider-registry.service';
 import { standardListAnimation } from '../../../ui/animations/standard-list.ani';
 import { MatIconButton } from '@angular/material/button';
 import { TranslatePipe } from '@ngx-translate/core';
 import { MatInput } from '@angular/material/input';
 import { MatTooltip } from '@angular/material/tooltip';
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
+import { Log } from '../../../core/log';
+import { IssueProviderJira } from '../../issue/issue.model';
 
 @Component({
   selector: 'issue-provider-tab',
@@ -86,11 +90,19 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
   readonly T: typeof T = T;
   readonly SEARCH_MIN_LENGTH = 1;
   readonly ISSUE_PROVIDER_HUMANIZED = ISSUE_PROVIDER_HUMANIZED;
+  protected readonly IS_WEB_EXTENSION_REQUIRED_FOR_JIRA = IS_WEB_BROWSER;
+  protected isJiraDirectFetchEnabled = computed(() => {
+    const ip = this.issueProvider();
+    return (
+      ip.issueProviderKey === 'JIRA' && !!(ip as IssueProviderJira).allowFetchFallback
+    );
+  });
 
   dropListService = inject(DropListService);
   private _issueService = inject(IssueService);
   private _matDialog = inject(MatDialog);
   private _store = inject(Store);
+  private _pluginRegistry = inject(PluginIssueProviderRegistryService);
 
   issueProvider = input.required<IssueProvider>();
   issueProvider$ = toObservable(this.issueProvider);
@@ -98,6 +110,11 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
   searchText = signal('');
   searchTxt$ = toObservable(this.searchText);
 
+  useAgendaView = computed(
+    () =>
+      this.issueProvider().issueProviderKey === 'ICAL' ||
+      this._pluginRegistry.getUseAgendaView(this.issueProvider().issueProviderKey),
+  );
   issueProviderTooltip = computed(() => getIssueProviderTooltip(this.issueProvider()));
   issueProviderHelpLink = computed(() =>
     getIssueProviderHelpLink(this.issueProvider().issueProviderKey),
@@ -117,7 +134,7 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
         : of(null),
     ),
     catchError(() => {
-      console.error('Project not found for issueProvider');
+      Log.err('Project not found for issueProvider');
       return of(null);
     }),
   );
@@ -126,46 +143,45 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
   // TODO add caching in sessionStorage
   issueItems$: Observable<{ added: SearchResultItem[]; notAdded: SearchResultItem[] }> =
     this.searchTxt$.pipe(
-      switchMap((st) => {
-        if (st.length < this.SEARCH_MIN_LENGTH) {
+      debounce(() => timer(400)),
+      switchMap((searchText) => {
+        if (searchText.length < this.SEARCH_MIN_LENGTH) {
           this.isLoading.set(false);
           return of({ added: [], notAdded: [] });
         }
-        return of(st).pipe(
-          debounceTime(400),
-          switchMap((searchText) => {
-            return this.issueProvider$.pipe(
-              distinctUntilChanged((a, b) => {
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                const { pinnedSearch, ...restA } = a;
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                const { pinnedSearch: pinnedSearchB, ...restB } = b;
-                // return JSON.stringify(restA) === JSON.stringify(restB);
-                return JSON.stringify(restA) === JSON.stringify(restB);
-              }),
-              map((ip): [string, IssueProvider] => [searchText, ip as any]),
-            );
+        return this.issueProvider$.pipe(
+          distinctUntilChanged((a, b) => {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { pinnedSearch, ...restA } = a;
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { pinnedSearch: pinnedSearchB, ...restB } = b;
+            return JSON.stringify(restA) === JSON.stringify(restB);
           }),
 
           tap(() => this.isLoading.set(true)),
 
-          switchMap(([searchText, issueProvider]: [string, IssueProvider]) =>
-            this._issueService
-              .searchIssues$(searchText, issueProvider.id, issueProvider.issueProviderKey)
-              .pipe(
-                catchError((e) => {
-                  this.error.set(getErrorTxt(e));
-                  this.isLoading.set(false);
-                  return of(true);
-                }),
-                map((trueOnErrorOrItems) => {
-                  if (trueOnErrorOrItems === true) {
-                    return [];
-                  }
-                  this.error.set(undefined);
-                  return trueOnErrorOrItems as SearchResultItem[];
-                }),
+          switchMap((issueProvider: IssueProvider) =>
+            from(
+              this._issueService.searchIssues(
+                searchText,
+                issueProvider.id,
+                issueProvider.issueProviderKey,
               ),
+            ).pipe(
+              catchError((e) => {
+                this.error.set(getErrorTxt(e));
+                this.isLoading.set(false);
+                return of(true);
+              }),
+              tap(() => this.isLoading.set(false)),
+              map((trueOnErrorOrItems) => {
+                if (trueOnErrorOrItems === true) {
+                  return [];
+                }
+                this.error.set(undefined);
+                return trueOnErrorOrItems as SearchResultItem[];
+              }),
+            ),
           ),
 
           switchMap((items) =>
@@ -175,19 +191,19 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
                 map((allIssueIdsForProvider) => {
                   const added: SearchResultItem[] = [];
                   const notAdded: SearchResultItem[] = [];
-                  items.forEach((item) => {
+                  for (const item of items) {
                     if (allIssueIdsForProvider.includes(item.issueData.id.toString())) {
                       added.push(item);
                     } else {
                       notAdded.push(item);
                     }
-                  });
+                  }
+
                   return { added, notAdded };
                 }),
               ),
           ),
-
-          tap(() => this.isLoading.set(false)),
+          finalize(() => this.isLoading.set(false)),
         );
       }),
     );
@@ -246,7 +262,7 @@ export class IssueProviderTabComponent implements OnDestroy, AfterViewInit {
       throw new Error('Issue Provider and Search Result Type dont match');
     }
 
-    console.log('Add issue', item);
+    Log.log('Add issue', { issueType: item.issueType });
 
     this._issueService.addTaskFromIssue({
       issueDataReduced: item.issueData,

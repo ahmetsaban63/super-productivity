@@ -1,4 +1,4 @@
-/* eslint-disable max-len */
+/* eslint-disable @typescript-eslint/naming-convention */
 import { ConfigFormSection } from '../global-config.model';
 import {
   SimpleCounterConfig,
@@ -7,12 +7,11 @@ import {
 import { T } from '../../../t.const';
 import { EMPTY_SIMPLE_COUNTER } from '../../simple-counter/simple-counter.const';
 import { nanoid } from 'nanoid';
-import { FormlyFieldConfig } from '@ngx-formly/core/lib/models/fieldconfig';
+import { FormlyFieldConfig } from '@ngx-formly/core';
 
 export const SIMPLE_COUNTER_FORM: ConfigFormSection<SimpleCounterConfig> = {
   title: T.F.SIMPLE_COUNTER.FORM.TITLE,
   key: 'EMPTY',
-  customSection: 'SIMPLE_COUNTER_CFG',
   help: T.F.SIMPLE_COUNTER.FORM.HELP,
   items: [
     {
@@ -81,7 +80,6 @@ export const SIMPLE_COUNTER_FORM: ConfigFormSection<SimpleCounterConfig> = {
             },
             hooks: {
               onInit: (field) => {
-                console.log(field?.formControl?.value);
                 if (!field?.formControl?.value && field?.formControl?.value !== null) {
                   field?.formControl?.setValue(30 * 60000);
                 }
@@ -104,44 +102,78 @@ export const SIMPLE_COUNTER_FORM: ConfigFormSection<SimpleCounterConfig> = {
           {
             key: 'streakMinValue',
             type: 'input',
+            resetOnHide: false,
             expressions: {
               hide: (fCfg: FormlyFieldConfig) =>
                 fCfg.model.type === SimpleCounterType.StopWatch ||
                 !fCfg.model.isTrackStreaks,
+              'props.required': (fCfg: FormlyFieldConfig) =>
+                fCfg.model.type !== SimpleCounterType.StopWatch &&
+                !!fCfg.model.isTrackStreaks,
             },
             templateOptions: {
               label: T.F.SIMPLE_COUNTER.FORM.L_DAILY_GOAL,
               type: 'number',
               min: 1,
-              required: true,
               getInitialValue: () => 1,
             },
           },
           {
             key: 'streakMinValue',
             type: 'duration',
+            resetOnHide: false,
             expressions: {
               hide: (fCfg: FormlyFieldConfig) =>
                 fCfg.model.type !== SimpleCounterType.StopWatch ||
                 !fCfg.model.isTrackStreaks,
+              'props.required': (fCfg: FormlyFieldConfig) =>
+                fCfg.model.type === SimpleCounterType.StopWatch &&
+                !!fCfg.model.isTrackStreaks,
             },
             templateOptions: {
               label: T.F.SIMPLE_COUNTER.FORM.L_DAILY_GOAL,
               min: 60 * 1000,
-              required: true,
               description: T.G.DURATION_DESCRIPTION,
               getInitialValue: () => 10 * 60 * 1000,
             },
           },
           {
-            key: 'streakWeekDays',
-            type: 'multicheckbox',
+            key: 'streakMode',
+            type: 'select',
+            resetOnHide: false,
             expressions: {
               hide: (fCfg: FormlyFieldConfig) => !fCfg.model.isTrackStreaks,
+              'props.required': (fCfg: FormlyFieldConfig) => !!fCfg.model.isTrackStreaks,
+            },
+            templateOptions: {
+              label: T.F.SIMPLE_COUNTER.FORM.L_STREAK_MODE,
+              options: [
+                {
+                  label: T.F.SIMPLE_COUNTER.FORM.L_STREAK_MODE_SPECIFIC_DAYS,
+                  value: 'specific-days',
+                },
+                {
+                  label: T.F.SIMPLE_COUNTER.FORM.L_STREAK_MODE_WEEKLY_FREQUENCY,
+                  value: 'weekly-frequency',
+                },
+              ],
+              getInitialValue: () => 'specific-days',
+            },
+          },
+          {
+            key: 'streakWeekDays',
+            type: 'multicheckbox',
+            resetOnHide: false,
+            expressions: {
+              hide: (fCfg: FormlyFieldConfig) =>
+                !fCfg.model.isTrackStreaks ||
+                (fCfg.model.streakMode && fCfg.model.streakMode !== 'specific-days'),
+              'props.required': (fCfg: FormlyFieldConfig) =>
+                !!fCfg.model.isTrackStreaks &&
+                (!fCfg.model.streakMode || fCfg.model.streakMode === 'specific-days'),
             },
             templateOptions: {
               label: T.F.SIMPLE_COUNTER.FORM.L_WEEKDAYS,
-              required: true,
               options: [
                 { label: T.F.TASK_REPEAT.F.MONDAY, value: 1 },
                 { label: T.F.TASK_REPEAT.F.TUESDAY, value: 2 },
@@ -151,6 +183,34 @@ export const SIMPLE_COUNTER_FORM: ConfigFormSection<SimpleCounterConfig> = {
                 { label: T.F.TASK_REPEAT.F.SATURDAY, value: 6 },
                 { label: T.F.TASK_REPEAT.F.SUNDAY, value: 0 },
               ],
+            },
+          },
+          {
+            key: 'streakWeeklyFrequency',
+            type: 'input',
+            resetOnHide: false,
+            expressions: {
+              hide: (fCfg: FormlyFieldConfig) =>
+                !fCfg.model.isTrackStreaks ||
+                !fCfg.model.streakMode ||
+                fCfg.model.streakMode !== 'weekly-frequency',
+              'props.required': (fCfg: FormlyFieldConfig) =>
+                !!fCfg.model.isTrackStreaks &&
+                fCfg.model.streakMode === 'weekly-frequency',
+            },
+            templateOptions: {
+              label: T.F.SIMPLE_COUNTER.FORM.L_WEEKLY_FREQUENCY,
+              type: 'number',
+              min: 1,
+              max: 7,
+              getInitialValue: () => 3,
+            },
+          },
+          {
+            type: 'checkbox',
+            key: 'isHideButton',
+            templateOptions: {
+              label: T.F.SIMPLE_COUNTER.FORM.L_IS_HIDE_BUTTON,
             },
           },
         ],

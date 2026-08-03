@@ -1,47 +1,91 @@
-import { GlobalConfigState } from './global-config.model';
-import { DEFAULT_PROJECT_ID } from '../project/project.const';
-import { TRACKING_INTERVAL } from 'src/app/app.constants';
-import { getDefaultVoice } from 'src/app/features/domina-mode/getAvailableVoices';
-const minute = 60 * 1000;
-const defaultVoice = getDefaultVoice();
-console.log('Setting default voice as' + defaultVoice);
+import { environment } from '../../../environments/environment';
+import {
+  HAS_OFFICIAL_ONEDRIVE_CLIENT_ID,
+  OFFICIAL_ONEDRIVE_CLIENT_ID,
+} from '../../imex/sync/onedrive-auth-mode.const';
 
-export const DEFAULT_DAY_START = '9:00';
-export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
-  lang: {
-    lng: null,
-  },
-  misc: {
-    darkMode: 'system',
-    isConfirmBeforeExit: false,
-    isConfirmBeforeExitWithoutFinishDay: true,
-    isAutMarkParentAsDone: false,
-    isTurnOffMarkdown: false,
-    isAutoAddWorkedOnToToday: true,
-    isMinimizeToTray: false,
-    isTrayShowCurrentTask: true,
-    defaultProjectId: DEFAULT_PROJECT_ID,
-    firstDayOfWeek: 1,
-    startOfNextDay: 0,
-    isUseMinimalNav: false,
-    isDisableAnimations: false,
-    taskNotesTpl: `**How can I best achieve it now?**
+import { TaskReminderOptionId } from '../tasks/task.model';
+import { GlobalConfigState } from './global-config.model';
+import { INBOX_PROJECT } from '../project/project.const';
+import { DEFAULT_MAX_BACKUP_FILES } from '../../../../electron/shared-with-frontend/backup-file-cleanup.util';
+
+const minute = 60 * 1000;
+const defaultTaskNotesTemplate = `**How can I best achieve it now?**
 
 **What do I want?**
 
 **Why do I want it?**
-`,
+`;
+
+export const DEFAULT_DAY_START = '9:00';
+export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
+  appFeatures: {
+    isTimeTrackingEnabled: true,
+    isFocusModeEnabled: true,
+    isSchedulerEnabled: true,
+    isPlannerEnabled: true,
+    isBoardsEnabled: true,
+    isScheduleDayPanelEnabled: true,
+    isIssuesPanelEnabled: true,
+    isProjectNotesEnabled: true,
+    isSyncIconEnabled: true,
+    isSearchEnabled: true,
+    isDonatePageEnabled: true,
+    isEnableUserProfiles: false,
+    isHabitsEnabled: true,
+    isFinishDayEnabled: true,
+  },
+  localization: {
+    lng: undefined,
+    dateTimeLocale: undefined,
+    firstDayOfWeek: undefined,
+  },
+  tasks: {
+    isConfirmBeforeDelete: true,
+    isAutoAddWorkedOnToToday: true,
+    isAutoMarkParentAsDone: false,
+    isTrayShowCurrent: true,
+    defaultProjectId: INBOX_PROJECT.id,
+    isMarkdownFormattingInNotesEnabled: true,
+    notesTemplate: defaultTaskNotesTemplate,
+  },
+  misc: {
+    isConfirmBeforeExit: false,
+    isConfirmBeforeExitWithoutFinishDay: true,
+    isMinimizeToTray: false,
+    isLocalRestApiEnabled: false,
+    isCheckForUpdates: true,
+    isTrayShowCurrentCountdown: true,
+    startOfNextDay: 0,
+    startOfNextDayTime: '00:00',
+    isDisableAnimations: false,
+    isVerticalActionBar: false,
+    isDisableCelebration: false,
+    // NOTE: isUseCustomWindowTitleBar is intentionally NOT defaulted here. A
+    // persisted default would be pushed to Electron on every launch and override
+    // a legacy `isUseObsidianStyleHeader` choice. Its effective default is resolved
+    // at read time (main-window.ts / global-theme.service.ts: defaults on, forced
+    // off only on GNOME+Wayland) and the settings checkbox is seeded display-only
+    // in misc-settings-form (#7891).
+    isShowProductivityTipLonger: false,
+    customTheme: 'default',
+    defaultStartPage: 0,
+    backgroundImageDark: null,
+    backgroundImageLight: null,
   },
   shortSyntax: {
     isEnableProject: true,
     isEnableDue: true,
+    isEnableDeadline: false,
     isEnableTag: true,
+    urlBehavior: 'keep',
   },
   evaluation: {
     isHideEvaluationSheet: false,
   },
   idle: {
     isOnlyOpenIdleWhenCurrentTask: false,
+    isSuppressIdleDuringFocusMode: false,
     isEnableIdleTimeTracking: true,
     minIdleTime: 5 * minute,
   },
@@ -51,7 +95,7 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     isTimedFullScreenBlocker: false,
     timedFullScreenBlockerDuration: 8000,
     isFocusWindow: false,
-    /* eslint-disable-next-line */
+
     takeABreakMessage:
       'You have been working for ${duration} without one. Go away from the computer! Take a short walk! Makes you more productive in the long run!',
     takeABreakMinWorkingTime: 60 * minute,
@@ -63,43 +107,51 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     interval: 5 * minute,
     volume: 75,
     text: 'Your current task is: ${currentTaskTitle}',
-    voice: defaultVoice,
+    voice: '',
   },
   focusMode: {
-    isAlwaysUseFocusMode: false,
     isSkipPreparation: false,
+    isShowPreparation: false,
+    isPlayTick: false,
+    focusModeSound: 'off',
+    isPauseTrackingDuringBreak: true,
+    autoStartFocusOnPlay: false,
+    isManualBreakStart: false,
+  },
+  flowtime: {
+    isBreakEnabled: false,
+    breakMode: 'ratio',
+    breakPercentage: 20,
+    breakRules: [],
+  },
+  clipboardImages: {
+    imagePath: null,
   },
   pomodoro: {
-    isEnabled: false,
     duration: 25 * minute,
     breakDuration: 5 * minute,
     longerBreakDuration: 15 * minute,
     cyclesBeforeLongerBreak: 4,
-    isStopTrackingOnBreak: true,
-    isStopTrackingOnLongBreak: true,
-    isManualContinue: false,
-    isManualContinueBreak: false,
-    isPlaySound: true,
-    isPlaySoundAfterBreak: false,
-    // isGoToWorkView: false,
-    isPlayTick: false,
   },
   keyboard: {
     globalShowHide: 'Ctrl+Shift+X',
     globalToggleTaskStart: null,
     globalAddNote: null,
     globalAddTask: null,
+    globalToggleTaskWidget: null,
     addNewTask: 'Shift+A',
-    addNewNote: 'n',
+    addNewProject: 'Shift+P',
+    addNewNote: 'Alt+N',
     openProjectNotes: 'Shift+N',
-    toggleIssuePanel: 'p',
-    toggleSideNav: 'Shift+D',
+    toggleTaskViewCustomizerPanel: 'C',
+    toggleIssuePanel: 'P',
+    focusSideNav: 'Shift+D',
+    toggleSideNavMode: 'Ctrl+B',
     showHelp: '?',
     showSearchBar: 'Shift+F',
-    toggleBookmarks: 'Shift+V',
-    toggleBacklog: 'b',
-    goToFocusMode: 'f',
-    goToWorkView: 'w',
+    toggleBacklog: 'B',
+    goToFocusMode: 'F',
+    goToWorkView: 'W',
     goToScheduledView: 'Shift+S',
     goToTimeline: 'Shift+T',
     // goToDailyAgenda: null,
@@ -108,42 +160,49 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     zoomIn: 'Ctrl++',
     zoomOut: 'Ctrl+-',
     zoomDefault: 'Ctrl+0',
-    saveNote: 'Ctrl+s',
-    triggerSync: 'Ctrl+s',
+    triggerSync: 'Ctrl+S',
     taskEditTitle: null,
-    taskToggleDetailPanelOpen: 'i',
-    taskOpenEstimationDialog: 't',
-    taskSchedule: 's',
-    taskToggleDone: 'd',
-    taskAddSubTask: 'a',
-    taskAddAttachment: 'l',
+    taskToggleDetailPanelOpen: 'I',
+    taskOpenNotesPanel: 'N',
+    taskOpenNotesFullscreen: null,
+    taskOpenEstimationDialog: 'T',
+    taskSchedule: 'S',
+    taskScheduleToday: 'Shift+T',
+    taskScheduleTomorrow: null,
+    taskScheduleNextWeek: null,
+    taskScheduleNextMonth: null,
+    taskScheduleDeadline: 'Shift+S',
+    taskUnschedule: 'U',
+    taskToggleDone: 'D',
+    taskAddSubTask: 'A',
+    taskAddAttachment: 'L',
     taskDelete: 'Backspace',
-    taskMoveToProject: 'e',
-    taskOpenContextMenu: 'q',
-    selectPreviousTask: 'k',
-    selectNextTask: 'j',
+    taskMoveToProject: 'E',
+    taskOpenContextMenu: 'Q',
+    selectPreviousTask: 'K',
+    selectNextTask: 'J',
     moveTaskUp: 'Ctrl+Shift+ArrowUp',
     moveTaskDown: 'Ctrl+Shift+ArrowDown',
     moveTaskToTop: 'Ctrl+Alt+ArrowUp',
     moveTaskToBottom: 'Ctrl+Alt+ArrowDown',
     moveToBacklog: 'Shift+B',
-    moveToTodaysTasks: 'Shift+T',
     expandSubTasks: null,
     collapseSubTasks: null,
-    togglePlay: 'y',
-    taskEditTags: 'g',
+    togglePlay: 'Y',
+    taskEditTags: 'G',
   },
   localBackup: {
     isEnabled: true,
+    maxBackupFiles: DEFAULT_MAX_BACKUP_FILES,
   },
   sound: {
     volume: 75,
     isIncreaseDoneSoundPitch: true,
-    doneSound: 'done2.mp3',
+    doneSound: 'ding-small-bell.mp3',
     breakReminderSound: null,
+    trackTimeSound: null,
   },
   timeTracking: {
-    trackingInterval: TRACKING_INTERVAL,
     defaultEstimate: 0,
     defaultEstimateSubTasks: 0,
     isNotifyWhenTimeEstimateExceeded: true,
@@ -151,10 +210,17 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     isTrackingReminderEnabled: false,
     isTrackingReminderShowOnMobile: false,
     trackingReminderMinTime: 5 * minute,
+    isTrackingReminderNotify: false, // Show desktop notification when tracking reminder is triggered
+    isTrackingReminderFocusWindow: false, // Focus the application window when tracking reminder is triggered
   },
   reminder: {
     isCountdownBannerEnabled: true,
     countdownDuration: minute * 10,
+    defaultTaskRemindOption: TaskReminderOptionId.AtStart, // The hard-coded default prior to this changeable setting
+    isFocusWindow: false,
+    useAlarmStyleReminders: false,
+    notifyOnDueDate: true,
+    dueDateNotificationHour: 9,
   },
   schedule: {
     isWorkStartEndEnabled: true,
@@ -170,15 +236,12 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     // TODO maybe enable later if it works well
     isCompressionEnabled: false,
     isEncryptionEnabled: false,
-    encryptionPassword: null,
+    // SPAP-11: opt-in split-file ("Surgical") sync. Default OFF (single-file v2).
+    isUseSplitSyncFiles: false,
+    encryptKey: null,
     syncProvider: null,
     syncInterval: minute,
-
-    dropboxSync: {
-      accessToken: null,
-      refreshToken: null,
-      _tokenExpiresAt: undefined,
-    },
+    isManualSyncOnly: false,
 
     webDav: {
       baseUrl: null,
@@ -187,8 +250,33 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
       syncFolderPath: 'super-productivity',
     },
 
+    superSync: {
+      baseUrl: environment.production
+        ? 'https://sync.super-productivity.com'
+        : 'http://localhost:1901',
+      userName: null,
+      password: null,
+      accessToken: null,
+      syncFolderPath: null,
+    },
+
     localFileSync: {
+      syncFolderPath: '',
+    },
+
+    nextcloud: {
+      serverUrl: null,
+      loginName: null,
+      userName: null,
+      password: null,
       syncFolderPath: 'super-productivity',
     },
+
+    oneDrive: {
+      useCustomApp: !HAS_OFFICIAL_ONEDRIVE_CLIENT_ID,
+      clientId: OFFICIAL_ONEDRIVE_CLIENT_ID,
+      tenantId: 'common',
+      syncFolderPath: 'Super Productivity',
+    },
   },
-};
+} as const;

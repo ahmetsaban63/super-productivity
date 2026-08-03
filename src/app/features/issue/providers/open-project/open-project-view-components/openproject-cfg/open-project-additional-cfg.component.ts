@@ -29,7 +29,7 @@ import { OpenProjectApiService } from '../../open-project-api.service';
 import {
   OpenProjectWorkPackage,
   OpenProjectWorkPackageReduced,
-} from '../../open-project-issue/open-project-issue.model';
+} from '../../open-project-issue.model';
 import { DEFAULT_OPEN_PROJECT_CFG } from '../../open-project.const';
 import {
   OpenProjectTransitionConfig,
@@ -105,7 +105,7 @@ export class OpenProjectAdditionalCfgComponent implements OnInit, OnDestroy {
     );
   transitionConfigOpts: {
     key: keyof OpenProjectTransitionConfig;
-    val: OpenProjectTransitionOption;
+    val: OpenProjectTransitionOption | undefined;
   }[] = [];
 
   private _subs: Subscription = new Subscription();
@@ -134,7 +134,7 @@ export class OpenProjectAdditionalCfgComponent implements OnInit, OnDestroy {
       // needs to made writeable first
       newCfg.transitionConfig = { ...newCfg.transitionConfig };
       Object.keys(newCfg.transitionConfig).forEach((key: string) => {
-        if (!(key in DEFAULT_OPEN_PROJECT_CFG.transitionConfig)) {
+        if (!(key in DEFAULT_OPEN_PROJECT_CFG.transitionConfig!)) {
           delete (newCfg.transitionConfig as any)[key];
         }
       });
@@ -146,11 +146,11 @@ export class OpenProjectAdditionalCfgComponent implements OnInit, OnDestroy {
 
     this._cfg = newCfg;
 
-    this.transitionConfigOpts = Object.keys(newCfg.transitionConfig).map((k: string) => {
+    this.transitionConfigOpts = Object.keys(newCfg.transitionConfig!).map((k: string) => {
       const key = k as keyof OpenProjectTransitionConfig;
       return {
         key,
-        val: newCfg.transitionConfig[key],
+        val: newCfg.transitionConfig![key],
       };
     });
   }
@@ -163,15 +163,19 @@ export class OpenProjectAdditionalCfgComponent implements OnInit, OnDestroy {
     this._subs.unsubscribe();
   }
 
-  getTransition(key: keyof OpenProjectTransitionConfig): OpenProjectTransitionOption {
-    return this.cfg.transitionConfig[key];
+  getTransition(
+    key: keyof OpenProjectTransitionConfig,
+  ): OpenProjectTransitionOption | undefined {
+    return this.cfg.transitionConfig?.[key];
   }
 
   setTransition(
     key: keyof OpenProjectTransitionConfig,
     value: OpenProjectTransitionOption,
   ): OpenProjectTransitionOption {
-    const transitionConfig = { ...this.cfg.transitionConfig };
+    const transitionConfig: OpenProjectTransitionConfig = {
+      ...this.cfg.transitionConfig!,
+    };
     transitionConfig[key] = value;
     if (key === 'DONE') {
       if (value === 'ALWAYS_ASK' || value === 'DO_NOT') {
@@ -226,7 +230,7 @@ export class OpenProjectAdditionalCfgComponent implements OnInit, OnDestroy {
   }
 
   showSetProgressOption(key: any): boolean {
-    const transitionOption = this.getTransition(key).valueOf();
+    const transitionOption = this.getTransition(key)?.valueOf();
     let shouldShow: boolean = false;
     if (key === 'DONE') {
       shouldShow = transitionOption !== 'DO_NOT' && transitionOption !== 'ALWAYS_ASK';

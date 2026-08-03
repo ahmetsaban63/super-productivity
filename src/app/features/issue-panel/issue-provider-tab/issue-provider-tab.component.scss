@@ -1,4 +1,4 @@
-@import '../../../../variables';
+@use '../../../../styles/_globals.scss' as *;
 
 $pad: 12px;
 
@@ -22,7 +22,7 @@ $pad: 12px;
 header {
   display: flex;
   align-items: center;
-  margin-top: 16px;
+  margin-top: var(--s2);
 }
 
 .title,
@@ -34,12 +34,7 @@ header {
 .title,
 .default-project {
   font-style: italic;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.title {
-  white-space: nowrap;
+  @include truncateText();
 }
 
 .default-project {
@@ -47,19 +42,19 @@ header {
 }
 
 .arrow {
-  margin: 0 $s;
+  margin: 0 var(--s);
   min-width: 24px;
 }
 
 .empty {
   text-align: center;
   font-style: italic;
-  margin-top: $s * 2;
-  margin-bottom: $s * 2;
+  margin-top: var(--s2);
+  margin-bottom: var(--s2);
 }
 
 .item-list {
-  gap: 8px;
+  gap: var(--s);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -68,7 +63,7 @@ header {
 .spinner {
   display: flex;
   justify-content: center;
-  padding: 8px;
+  padding: var(--s);
 }
 
 .keep-ico {
